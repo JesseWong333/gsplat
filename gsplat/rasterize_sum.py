@@ -145,6 +145,8 @@ class _RasterizeGaussiansSum(Function):
             )
             if colors.shape[-1] == 3:
                 rasterize_fn = _C.rasterize_sum_forward
+            elif colors.shape[-1] == 1:
+                rasterize_fn = _C.nd_rasterize_sum_forward # todo： color目前没有用，可删除
             else:
                 rasterize_fn = _C.nd_rasterize_sum_forward
 
@@ -216,6 +218,8 @@ class _RasterizeGaussiansSum(Function):
         else:
             if colors.shape[-1] == 3:
                 rasterize_fn = _C.rasterize_sum_backward
+            elif colors.shape[-1] == 1:
+                rasterize_fn = _C.nd_rasterize_sum_backward
             else:
                 rasterize_fn = _C.nd_rasterize_sum_backward
             v_xy, v_conic, v_colors, v_opacity = rasterize_fn(

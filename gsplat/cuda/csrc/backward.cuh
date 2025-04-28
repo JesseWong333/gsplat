@@ -52,8 +52,10 @@ __global__ void nd_rasterize_backward_kernel(
 );
 
 __global__ void rasterize_backward_kernel(
-    const dim3 tile_bounds,
-    const dim3 img_size,
+    const unsigned tile_bounds_x,
+    const unsigned tile_bounds_y,
+    const unsigned img_size_x,
+    const unsigned img_size_y,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
@@ -91,6 +93,26 @@ __global__ void rasterize_backward_sum_kernel(
     float* __restrict__ v_opacity
 );
 
+// __global__ void rasterize_1d_backward_sum_kernel(
+//     const dim3 tile_bounds,
+//     const dim3 img_size,
+//     const int32_t* __restrict__ gaussian_ids_sorted,
+//     const int2* __restrict__ tile_bins,
+//     const float2* __restrict__ xys,
+//     const float3* __restrict__ conics,
+//     const float* __restrict__ rgbs,
+//     const float* __restrict__ opacities,
+//     const float& __restrict__ background,
+//     const float* __restrict__ final_Ts,
+//     const int* __restrict__ final_index,
+//     const float* __restrict__ v_output,
+//     const float* __restrict__ v_output_alpha,
+//     float2* __restrict__ v_xy,
+//     float3* __restrict__ v_conic,
+//     float* __restrict__ v_rgb,
+//     float* __restrict__ v_opacity
+// );
+
 __global__ void rasterize_backward_sum_general_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -113,10 +135,10 @@ __global__ void rasterize_backward_sum_general_kernel(
     float* __restrict__ v_beta
 );
 
+// template <uint32_t channels>
 __global__ void nd_rasterize_backward_sum_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
-    const unsigned channels,
     const int32_t* __restrict__ gaussians_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
@@ -131,8 +153,8 @@ __global__ void nd_rasterize_backward_sum_kernel(
     float2* __restrict__ v_xy,
     float3* __restrict__ v_conic,
     float* __restrict__ v_rgb,
-    float* __restrict__ v_opacity,
-    float* __restrict__ workspace
+    float* __restrict__ v_opacity
+    // float* __restrict__ workspace
 );
 
 __device__ void project_cov3d_ewa_vjp(

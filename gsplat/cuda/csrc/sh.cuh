@@ -1,6 +1,6 @@
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
-#define CHANNELS 3
+#define CHANNELS 32
 namespace cg = cooperative_groups;
 
 __device__ __constant__ float SH_C0 = 0.28209479177387814f;

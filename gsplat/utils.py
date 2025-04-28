@@ -51,7 +51,7 @@ def map_gaussian_to_intersects(
 
 
 def get_tile_bin_edges(
-    num_intersects: int, isect_ids_sorted: Int[Tensor, "num_intersects 1"]
+    num_tile_bin:int, num_intersects: int, isect_ids_sorted: Int[Tensor, "num_intersects 1"]
 ) -> Int[Tensor, "num_intersects 2"]:
     """Map sorted intersection IDs to tile bins which give the range of unique gaussian IDs belonging to each tile.
 
@@ -71,7 +71,7 @@ def get_tile_bin_edges(
 
         - **tile_bins** (Tensor): range of gaussians IDs hit per tile.
     """
-    return _C.get_tile_bin_edges(num_intersects, isect_ids_sorted.contiguous())
+    return _C.get_tile_bin_edges(num_tile_bin, num_intersects, isect_ids_sorted.contiguous())
 
 
 def compute_cov2d_bounds(
@@ -152,16 +152,17 @@ def bin_and_sort_gaussians(
     Returns:
         A tuple of {Tensor, Tensor, Tensor, Tensor, Tensor}:
 
-        - **isect_ids_unsorted** (Tensor): unique IDs for each gaussian in the form (tile | depth id).
+        - **isect_ids_unsorted** (Tensor): unique IDs for each gaussian in the form (tile | depth id). 
         - **gaussian_ids_unsorted** (Tensor): Tensor that maps isect_ids back to cum_tiles_hit. Useful for identifying gaussians.
         - **isect_ids_sorted** (Tensor): sorted unique IDs for each gaussian in the form (tile | depth id).
         - **gaussian_ids_sorted** (Tensor): sorted Tensor that maps isect_ids back to cum_tiles_hit. Useful for identifying gaussians.
         - **tile_bins** (Tensor): range of gaussians hit per tile.
     """
     isect_ids, gaussian_ids = map_gaussian_to_intersects(
-        num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds
+        num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds  # gaussian_ids 是按照个数复制的
     )
     isect_ids_sorted, sorted_indices = torch.sort(isect_ids)
     gaussian_ids_sorted = torch.gather(gaussian_ids, 0, sorted_indices)
-    tile_bins = get_tile_bin_edges(num_intersects, isect_ids_sorted)
+    # tile_bins = get_tile_bin_edges(num_intersects, isect_ids_sorted)
+    tile_bins = get_tile_bin_edges(tile_bounds[0] * tile_bounds[1], num_intersects, isect_ids_sorted) # 我觉得这里可能是个bug, 
     return isect_ids, gaussian_ids, isect_ids_sorted, gaussian_ids_sorted, tile_bins

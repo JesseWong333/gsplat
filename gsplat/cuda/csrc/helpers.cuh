@@ -4,6 +4,8 @@
 #include "third_party/glm/glm/gtc/type_ptr.hpp"
 #include <iostream>
 
+#define PRAGMA_UNROLL _Pragma("unroll")
+
 inline __device__ float ndc2pix(const float x, const float W, const float cx) {
     return 0.5f * W * x + cx - 0.5f;
 }

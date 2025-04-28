@@ -3,7 +3,8 @@
 #define BLOCK_SIZE (BLOCK_X * BLOCK_Y)
 #define N_THREADS 256
 
-#define MAX_REGISTER_CHANNELS 3
+#define MAX_REGISTER_CHANNELS 256
+#define CHANNELS 32
 
 #define CUDA_CALL(x)                                                           \
     do {                                                                       \
