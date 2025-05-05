@@ -14,14 +14,9 @@ def project_gaussians(
     scales: Float[Tensor, "*batch 3"],
     glob_scale: float,
     quats: Float[Tensor, "*batch 4"],
-    viewmat: Float[Tensor, "4 4"],
-    projmat: Float[Tensor, "4 4"],
-    fx: float,
-    fy: float,
-    cx: float,
-    cy: float,
-    img_height: int,
-    img_width: int,
+    cube_x: int,
+    cube_y: int,
+    cube_z: int,
     tile_bounds: Tuple[int, int, int],
     clip_thresh: float = 0.01,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, Tensor]:
@@ -35,15 +30,10 @@ def project_gaussians(
        scales (Tensor): scales of the gaussians.
        glob_scale (float): A global scaling factor applied to the scene.
        quats (Tensor): rotations in quaternion [w,x,y,z] format.
-       viewmat (Tensor): view matrix for rendering.
-       projmat (Tensor): projection matrix for rendering.
-       fx (float): focal length x.
-       fy (float): focal length y.
-       cx (float): principal point x.
-       cy (float): principal point y.
-       img_height (int): height of the rendered image.
-       img_width (int): width of the rendered image.
-       tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, 1).
+       cube_x (int): length in x axis of the rendered cube.
+       cube_y (int): length in y axis of the rendered cube.
+       cube_z (int): length in z axis of the rendered cube.
+       tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, tiles.z).
        clip_thresh (float): minimum z depth threshold.
 
     Returns:
@@ -61,14 +51,9 @@ def project_gaussians(
         scales.contiguous(),
         glob_scale,
         quats.contiguous(),
-        viewmat.contiguous(),
-        projmat.contiguous(),
-        fx,
-        fy,
-        cx,
-        cy,
-        img_height,
-        img_width,
+        cube_x,
+        cube_y,
+        cube_z,
         tile_bounds,
         clip_thresh,
     )
@@ -84,14 +69,9 @@ class _ProjectGaussians(Function):
         scales: Float[Tensor, "*batch 3"],
         glob_scale: float,
         quats: Float[Tensor, "*batch 4"],
-        viewmat: Float[Tensor, "4 4"],
-        projmat: Float[Tensor, "4 4"],
-        fx: float,
-        fy: float,
-        cx: float,
-        cy: float,
-        img_height: int,
-        img_width: int,
+        cube_x: int,
+        cube_y: int,
+        cube_z: int,
         tile_bounds: Tuple[int, int, int],
         clip_thresh: float = 0.01,
     ):
@@ -112,35 +92,25 @@ class _ProjectGaussians(Function):
             scales,
             glob_scale,
             quats,
-            viewmat,
-            projmat,
-            fx,
-            fy,
-            cx,
-            cy,
-            img_height,
-            img_width,
+            cube_x,
+            cube_y,
+            cube_z,
             tile_bounds,
             clip_thresh,
         )
 
         # Save non-tensors.
-        ctx.img_height = img_height
-        ctx.img_width = img_width
+        ctx.cube_x = cube_x
+        ctx.cube_y = cube_y
+        ctx.cube_z = cube_z
         ctx.num_points = num_points
         ctx.glob_scale = glob_scale
-        ctx.fx = fx
-        ctx.fy = fy
-        ctx.cx = cx
-        ctx.cy = cy
 
         # Save tensors.
         ctx.save_for_backward(
             means3d,
             scales,
             quats,
-            viewmat,
-            projmat,
             cov3d,
             radii,
             conics,
@@ -154,27 +124,20 @@ class _ProjectGaussians(Function):
             means3d,
             scales,
             quats,
-            viewmat,
-            projmat,
             cov3d,
             radii,
             conics,
         ) = ctx.saved_tensors
 
-        (v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat) = _C.project_gaussians_backward(
+        (v_cov3d, v_mean3d, v_scale, v_quat) = _C.project_gaussians_backward(
             ctx.num_points,
             means3d,
             scales,
             ctx.glob_scale,
             quats,
-            viewmat,
-            projmat,
-            ctx.fx,
-            ctx.fy,
-            ctx.cx,
-            ctx.cy,
-            ctx.img_height,
-            ctx.img_width,
+            ctx.cube_x,
+            ctx.cube_y,
+            ctx.cube_z,
             cov3d,
             radii,
             conics,
@@ -183,7 +146,7 @@ class _ProjectGaussians(Function):
             v_conics,
         )
 
-        # Return a gradient for each input.
+        # Return a gradient for each input. 需要跟 forward的输入 一一对应
         return (
             # means3d: Float[Tensor, "*batch 3"],
             v_mean3d,
@@ -193,21 +156,12 @@ class _ProjectGaussians(Function):
             None,
             # quats: Float[Tensor, "*batch 4"],
             v_quat,
-            # viewmat: Float[Tensor, "4 4"],
-            None,
-            # projmat: Float[Tensor, "4 4"],
-            None,
-            # fx: float,
-            None,
-            # fy: float,
-            None,
-            # cx: float,
-            None,
-            # cy: float,
             None,
             # img_height: int,
             None,
             # img_width: int,
+            None,
+            # img_length: int,
             None,
             # tile_bounds: Tuple[int, int, int],
             None,

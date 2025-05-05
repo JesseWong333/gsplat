@@ -47,20 +47,14 @@ project_gaussians_forward_tensor(
     torch::Tensor &scales,
     const float glob_scale,
     torch::Tensor &quats,
-    torch::Tensor &viewmat,
-    torch::Tensor &projmat,
-    const float fx,
-    const float fy,
-    const float cx,
-    const float cy,
-    const unsigned img_height,
-    const unsigned img_width,
+    const float cube_x,
+    const float cube_y,
+    const float cube_z, // 现在渲染的是以 pixel 的整数吗, 不是的, 是以 m 为单位的小数等
     const std::tuple<int, int, int> tile_bounds,
     const float clip_thresh
 );
 
 std::tuple<
-    torch::Tensor,
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
@@ -71,18 +65,13 @@ project_gaussians_backward_tensor(
     torch::Tensor &scales,
     const float glob_scale,
     torch::Tensor &quats,
-    torch::Tensor &viewmat,
-    torch::Tensor &projmat,
-    const float fx,
-    const float fy,
-    const float cx,
-    const float cy,
-    const unsigned img_height,
-    const unsigned img_width,
+    const float cube_x,
+    const float cube_y,
+    const float cube_z,
     torch::Tensor &cov3d,
     torch::Tensor &radii,
     torch::Tensor &conics,
-    torch::Tensor &v_xy,
+    torch::Tensor &v_xyz,
     torch::Tensor &v_depth,
     torch::Tensor &v_conic
 );
@@ -102,6 +91,12 @@ torch::Tensor get_tile_bin_edges_tensor(
     int num_tile_bin,
     int num_intersects,
     const torch::Tensor &isect_ids_sorted
+);
+
+torch::Tensor get_tile_bin_edges_pts_tensor(
+    int num_tile_bin,
+    int num_pts,
+    const torch::Tensor &tile_ids_sorted
 );
 
 std::tuple<
@@ -349,11 +344,13 @@ std::tuple<
     torch::Tensor,
     torch::Tensor
 > nd_rasterize_forward_sum_tensor(
+    const torch::Tensor &pts,
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
     const std::tuple<int, int, int> img_size,
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
+    const torch::Tensor &tile_bins_pts,
     const torch::Tensor &xys,
     const torch::Tensor &conics,
     const torch::Tensor &colors,
@@ -369,20 +366,18 @@ std::
         torch::Tensor  // dL_dopacity
         >
     nd_rasterize_backward_sum_tensor(
-        const unsigned img_height,
-        const unsigned img_width,
-        const unsigned BLOCK_H,
-        const unsigned BLOCK_W,
+        const torch::Tensor &pts,
+        const std::tuple<int, int, int> tile_bounds,
+        const std::tuple<int, int, int> block,
+        const std::tuple<int, int, int> img_size,
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
+        const torch::Tensor &tile_bins_pts,
         const torch::Tensor &xys,
         const torch::Tensor &conics,
         const torch::Tensor &colors,
         const torch::Tensor &opacities,
         const torch::Tensor &background,
-        const torch::Tensor &final_Ts,
-        const torch::Tensor &final_idx,
         const torch::Tensor &v_output, // dL_dout_color
-        const torch::Tensor &v_output_alpha
     );
     

@@ -9,17 +9,14 @@ __global__ void project_gaussians_forward_kernel(
     const float3* __restrict__ scales,
     const float glob_scale,
     const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,
-    const float* __restrict__ projmat,
-    const float4 intrins,
-    const dim3 img_size,
+    const float3 img_size,
     const dim3 tile_bounds,
     const float clip_thresh,
     float* __restrict__ covs3d,
-    float2* __restrict__ xys,
+    float3* __restrict__ xys,
     float* __restrict__ depths,
     int* __restrict__ radii,
-    float3* __restrict__ conics,
+    float* __restrict__ conics,
     int32_t* __restrict__ num_tiles_hit
 );
 
@@ -59,10 +56,12 @@ __global__ void nd_rasterize_forward(
 __global__ void nd_rasterize_forward_sum(
     const dim3 tile_bounds,
     const dim3 img_size,
+    const float3* __restrict__ pts,
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
+    const int2* __restrict__ tile_bins_pts,
+    const float3* __restrict__ xys,
+    const float* __restrict__ conics,
     const float* __restrict__ colors,
     const float* __restrict__ opacities,
     float* __restrict__ final_Ts,
@@ -100,6 +99,10 @@ __global__ void map_gaussian_to_intersects(
 
 __global__ void get_tile_bin_edges(
     const int num_intersects, const int64_t* __restrict__ isect_ids_sorted, int2* __restrict__ tile_bins
+);
+
+__global__ void get_tile_bin_edges_pts(
+    const int num_pts, const int32_t* __restrict__ tile_ids_sorted, int2* __restrict__ tile_bins
 );
 
 __global__ void rasterize_forward(

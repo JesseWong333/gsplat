@@ -8,7 +8,7 @@ namespace cg = cooperative_groups;
 
 // kernel function for projecting each gaussian on device
 // each thread processes one gaussian
-// 这个函数应该包含的过程：计算2d cov，num_tiles_hit tile_bounds blabla 然后接入rasterize_forward？
+// 这个函数应该包含的过程：计算2d cov，num_tiles_hit tile_bounds blabla
 __global__ void project_gaussians_2d_forward_kernel(
     const int num_points,
     const float2* __restrict__ means2d,
@@ -35,7 +35,7 @@ __global__ void project_gaussians_2d_forward_kernel(
     // float clamped_y = max(-1.0f, min(1.0f, means2d[idx].y)); // Clamp y between -1 and 1
 
     float2 center = {0.5f * img_size.x * means2d[idx].x + 0.5f * img_size.x,
-                     0.5f * img_size.y * means2d[idx].y + 0.5f * img_size.y};
+                     0.5f * img_size.y * means2d[idx].y + 0.5f * img_size.y};  // 这里转换成为实际的图像坐标
     // Assuming L is packed row-wise in a 1D array: [l11, l21, l22]
     float l11 = L_elements[idx].x; // scale_x
     float l21 = L_elements[idx].y; // covariance_xy
@@ -54,7 +54,7 @@ __global__ void project_gaussians_2d_forward_kernel(
     // printf("conic %d %.2f %.2f %.2f\n", idx, conic.x, conic.y, conic.z);
     conics[idx] = conic;
     xys[idx] = center;
-    radii[idx] = (int)radius;
+    radii[idx] = (int)radius;  // 半径为什么要存储一个 int 类型？
     uint2 tile_min, tile_max;
     get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max);
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);

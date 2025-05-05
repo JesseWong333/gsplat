@@ -8,21 +8,24 @@ from torch import Tensor
 from torch.autograd import Function
 
 import gsplat.cuda as _C
-from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
+from .utils import bin_and_sort_gaussians, compute_cumulative_intersects, bin_pts
 
 
 def rasterize_gaussians_sum(
-    xys: Float[Tensor, "*batch 2"],
-    depths: Float[Tensor, "*batch 1"],
+    pts: Float[Tensor, "*batch 3"],
+    xys: Float[Tensor, "*batch 3"],
+    depths: Float[Tensor, "*batch 1"],  # not used
     radii: Float[Tensor, "*batch 1"],
-    conics: Float[Tensor, "*batch 3"],
+    conics: Float[Tensor, "*batch 6"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
-    colors: Float[Tensor, "*batch channels"],
+    semantics: Float[Tensor, "*batch channels"],
     opacity: Float[Tensor, "*batch 1"],
-    img_height: int,
-    img_width: int,
-    BLOCK_H: int=16,
-    BLOCK_W: int=16, 
+    cube_x: int,
+    cube_y: int,
+    cube_z: int,
+    BLOCK_X: int=16,
+    BLOCK_Y: int=16,
+    BLOCK_Z: int=16, 
     background: Optional[Float[Tensor, "channels"]] = None,
     return_alpha: Optional[bool] = False,
 ) -> Tensor:
@@ -32,15 +35,16 @@ def rasterize_gaussians_sum(
         This function is differentiable w.r.t the xys, conics, colors, and opacity inputs.
 
     Args:
-        xys (Tensor): xy coords of 2D gaussians.
+        xyzs (Tensor): xy coords of 2D gaussians.
         depths (Tensor): depths of 2D gaussians.
         radii (Tensor): radii of 2D gaussians
-        conics (Tensor): conics (inverse of covariance) of 2D gaussians in upper triangular format
+        conics (Tensor): conics (inverse of covariance) of 3D gaussians in upper triangular format
         num_tiles_hit (Tensor): number of tiles hit per gaussian
         colors (Tensor): N-dimensional features associated with the gaussians.
         opacity (Tensor): opacity associated with the gaussians.
-        img_height (int): height of the rendered image.
-        img_width (int): width of the rendered image.
+        cube_x (int): length in x axis of the rendered cube.
+        cube_y (int): length in y axis of the rendered cube.
+        cube_z (int): length in z axis of the rendered cube.
         background (Tensor): background color
         return_alpha (bool): whether to return alpha channel
 
@@ -50,37 +54,47 @@ def rasterize_gaussians_sum(
         - **out_img** (Tensor): N-dimensional rendered output image.
         - **out_alpha** (Optional[Tensor]): Alpha channel of the rendered output image.
     """
-    if colors.dtype == torch.uint8:
-        # make sure colors are float [0,1]
-        colors = colors.float() / 255
 
-    if background is not None:
-        assert (
-            background.shape[0] == colors.shape[-1]
-        ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
-    else:
+    # if colors.dtype == torch.uint8:
+    #     # make sure colors are float [0,1]
+    #     colors = colors.float() / 255
+
+    # 是不是可以这样：计算是否占据的时候，先有一个二分类，再有一个多分类
+    # Gaussian former的哪一篇， 很可能是将 opacity作为occupancy的分类了
+    # -----------------------------------------------
+    # semantics shape: (N, channels)
+    # background shape: (N, 1)
+    # rendering shape: (N, channels + 1)
+    # -----------------------------------------------
+    # background针对的是没有高斯点的区域，显示默认的颜色
+    
+     
+    if background is None:
         background = torch.ones(
-            colors.shape[-1], dtype=torch.float32, device=colors.device
+            10, dtype=torch.float32, semantics=semantics.device  # 背景先不考虑，
         )
 
-    if xys.ndimension() != 2 or xys.size(1) != 2:
-        raise ValueError("xys must have dimensions (N, 2)")
+    if xys.ndimension() != 2 or xys.size(1) != 3:
+        raise ValueError("xys must have dimensions (N, 3)")
 
-    if colors.ndimension() != 2:
-        raise ValueError("colors must have dimensions (N, D)")
+    if semantics.ndimension() != 2:
+        raise ValueError("semantics must have dimensions (N, D)")
 
     return _RasterizeGaussiansSum.apply(
+        pts.contiguous(),
         xys.contiguous(),
         depths.contiguous(),
         radii.contiguous(),
         conics.contiguous(),
         num_tiles_hit.contiguous(),
-        colors.contiguous(),
+        semantics.contiguous(),
         opacity.contiguous(),
-        img_height,
-        img_width,
-        BLOCK_H, 
-        BLOCK_W,
+        cube_x,
+        cube_y,
+        cube_z,
+        BLOCK_X, 
+        BLOCK_Y,
+        BLOCK_Z,
         background.contiguous(),
         return_alpha,
     )
@@ -92,41 +106,44 @@ class _RasterizeGaussiansSum(Function):
     @staticmethod
     def forward(
         ctx,
-        xys: Float[Tensor, "*batch 2"],
+        pts: Float[Tensor, "*batch 3"], # points to rendering
+        xys: Float[Tensor, "*batch 3"],
         depths: Float[Tensor, "*batch 1"],
         radii: Float[Tensor, "*batch 1"],
-        conics: Float[Tensor, "*batch 3"],
+        conics: Float[Tensor, "*batch 6"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
         colors: Float[Tensor, "*batch channels"],
         opacity: Float[Tensor, "*batch 1"],
-        img_height: int,
-        img_width: int,
-        BLOCK_H: int=16,
-        BLOCK_W: int=16, 
+        cube_x: int,
+        cube_y: int,
+        cube_z: int,
+        BLOCK_X: int=16,
+        BLOCK_Y: int=16, 
+        BLOCK_Z: int=16,
         background: Optional[Float[Tensor, "channels"]] = None,
         return_alpha: Optional[bool] = False,
     ) -> Tensor:
         num_points = xys.size(0)
-        BLOCK_X, BLOCK_Y = BLOCK_W, BLOCK_H
+
         tile_bounds = (
-            (img_width + BLOCK_X - 1) // BLOCK_X,
-            (img_height + BLOCK_Y - 1) // BLOCK_Y,
-            1,
+            (cube_x + BLOCK_X - 1) // BLOCK_X,
+            (cube_y + BLOCK_Y - 1) // BLOCK_Y,
+            (cube_z + BLOCK_Z - 1) // BLOCK_Z,
         )
-        block = (BLOCK_X, BLOCK_Y, 1)
-        img_size = (img_width, img_height, 1)
+        block = (BLOCK_X, BLOCK_Y, BLOCK_Z)
+        img_size = (cube_x, cube_y, cube_z)
 
         num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
 
+    
         if num_intersects < 1:
-            out_img = (
-                torch.ones(img_height, img_width, colors.shape[-1], device=xys.device)
-                * background
+            rendering_out = (
+                torch.zeros(cube_x, cube_y, cube_z, colors.shape[-1], device=xys.device) # 
             )
             gaussian_ids_sorted = torch.zeros(0, 1, device=xys.device)
             tile_bins = torch.zeros(0, 2, device=xys.device)
-            final_Ts = torch.zeros(img_height, img_width, device=xys.device)
-            final_idx = torch.zeros(img_height, img_width, device=xys.device)
+            final_Ts = torch.zeros(cube_x, cube_y, cube_z, device=xys.device)
+            final_idx = torch.zeros(cube_x, cube_y, cube_z, device=xys.device)
         else:
             (
                 isect_ids_unsorted,
@@ -143,71 +160,83 @@ class _RasterizeGaussiansSum(Function):
                 cum_tiles_hit,
                 tile_bounds,
             )
-            if colors.shape[-1] == 3:
-                rasterize_fn = _C.rasterize_sum_forward
-            elif colors.shape[-1] == 1:
-                rasterize_fn = _C.nd_rasterize_sum_forward # todo： color目前没有用，可删除
-            else:
-                rasterize_fn = _C.nd_rasterize_sum_forward
-
-            out_img, final_Ts, final_idx = rasterize_fn(
+            
+            pts_sorted, sorted_indices, inv_sorted_indices, tile_bins_pts = bin_pts(pts, tile_bounds, block)
+      
+            rendering_out = _C.nd_rasterize_sum_forward(
+                pts_sorted,
                 tile_bounds,
                 block,
                 img_size,
                 gaussian_ids_sorted,
                 tile_bins,
+                tile_bins_pts,
                 xys,
                 conics,
                 colors,
                 opacity,
                 background,
             )
+            
+            rendering_out = rendering_out[inv_sorted_indices]
 
-        ctx.img_width = img_width
-        ctx.img_height = img_height
-        ctx.BLOCK_H = BLOCK_H
-        ctx.BLOCK_W = BLOCK_W
+        ctx.cube_x = cube_x
+        ctx.cube_y = cube_y
+        ctx.cube_z = cube_z
+        
+        ctx.BLOCK_X = BLOCK_X
+        ctx.BLOCK_Y = BLOCK_Y
+        ctx.BLOCK_Z = BLOCK_Z
+
+        ctx.tile_bounds = tile_bounds
+
         ctx.num_intersects = num_intersects
         ctx.save_for_backward(
+            pts_sorted,
             gaussian_ids_sorted,
             tile_bins,
+            tile_bins_pts,
             xys,
             conics,
             colors,
             opacity,
             background,
-            final_Ts,
-            final_idx,
+            sorted_indices
         )
 
-        if return_alpha:
-            out_alpha = 1 - final_Ts
-            return out_img, out_alpha
-        else:
-            return out_img
+        return rendering_out
 
     @staticmethod
-    def backward(ctx, v_out_img, v_out_alpha=None):
-        img_height = ctx.img_height
-        img_width = ctx.img_width
-        BLOCK_H = ctx.BLOCK_H
-        BLOCK_W = ctx.BLOCK_W
+    def backward(ctx, v_out_img):
+        
+        cube_x = ctx.cube_x
+        cube_y = ctx.cube_y
+        cube_z = ctx.cube_z
+        
+        BLOCK_X = ctx.BLOCK_X
+        BLOCK_Y = ctx.BLOCK_Y
+        BLOCK_Z = ctx.BLOCK_Z
+
+        tile_bounds = ctx.tile_bounds
+        
         num_intersects = ctx.num_intersects
 
-        if v_out_alpha is None:
-            v_out_alpha = torch.zeros_like(v_out_img[..., 0])
-
         (
+            pts_sorted,
             gaussian_ids_sorted,
             tile_bins,
+            tile_bins_pts,
             xys,
             conics,
             colors,
             opacity,
             background,
-            final_Ts,
-            final_idx,
+            sorted_indices
         ) = ctx.saved_tensors
+        
+        # v_out_img 是无序的梯度
+        sorted_indices = ctx.sorted_indices
+        v_out_img = v_out_img[sorted_indices] # 有序
 
         if num_intersects < 1:
             v_xy = torch.zeros_like(xys)
@@ -216,28 +245,20 @@ class _RasterizeGaussiansSum(Function):
             v_opacity = torch.zeros_like(opacity)
 
         else:
-            if colors.shape[-1] == 3:
-                rasterize_fn = _C.rasterize_sum_backward
-            elif colors.shape[-1] == 1:
-                rasterize_fn = _C.nd_rasterize_sum_backward
-            else:
-                rasterize_fn = _C.nd_rasterize_sum_backward
-            v_xy, v_conic, v_colors, v_opacity = rasterize_fn(
-                img_height,
-                img_width,
-                BLOCK_H,
-                BLOCK_W,
+            v_xy, v_conic, v_colors, v_opacity = _C.nd_rasterize_sum_backward(
+                pts_sorted,
+                tile_bounds,
+                (BLOCK_X, BLOCK_Y, BLOCK_Z),
+                (cube_x, cube_y, cube_z),
                 gaussian_ids_sorted,
                 tile_bins,
+                tile_bins_pts,
                 xys,
                 conics,
                 colors,
                 opacity,
                 background,
-                final_Ts,
-                final_idx,
                 v_out_img,
-                v_out_alpha,
             )
 
         return (

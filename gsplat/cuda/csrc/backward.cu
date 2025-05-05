@@ -207,7 +207,7 @@ __global__ void rasterize_backward_kernel(
     // each thread loads one gaussian at a time before rasterizing
     const int tr = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
-    const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
+    const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());  // 这个线程束中最大的一个 index of last gaussian to contribute to this pixel
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before writing next batch of shared mem
         block.sync();
@@ -590,7 +590,7 @@ __global__ void rasterize_backward_sum_kernel(
     // each thread loads one gaussian at a time before rasterizing
     const int tr = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
-    const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
+    const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>()); // find max bin_final, 再之外的高斯点可以不处理了
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before writing next batch of shared mem
         block.sync();
@@ -665,13 +665,13 @@ __global__ void rasterize_backward_sum_kernel(
 
                 const float v_sigma = -opac * vis * v_alpha;
                 v_conic_local = {0.5f * v_sigma * delta.x * delta.x, 
-                                        0.5f * v_sigma * delta.x * delta.y, 
+                                        0.5f * v_sigma * delta.x * delta.y,   // 这一项也有 0.5？
                                         0.5f * v_sigma * delta.y * delta.y};
                 v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y), 
                                     v_sigma * (conic.y * delta.x + conic.z * delta.y)};
                 v_opacity_local = vis * v_alpha;
             }
-            warpSum3(v_rgb_local, warp);
+            warpSum3(v_rgb_local, warp);  // 一个线程束先做一次 reduce， 再写；而不是每个线程都写回梯度，可以减少主内存压力
             warpSum3(v_conic_local, warp);
             warpSum2(v_xy_local, warp);
             warpSum(v_opacity_local, warp);
@@ -699,280 +699,227 @@ __global__ void rasterize_backward_sum_kernel(
 __global__ void nd_rasterize_backward_sum_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
+    const float3* __restrict__ pts,
     const int32_t* __restrict__ gaussians_ids_sorted,
     const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
+    const int2* __restrict__ tile_bins_pts,
+    const float3* __restrict__ xys,
+    const float* __restrict__ conics,
     const float* __restrict__ rgbs,
     const float* __restrict__ opacities,
     const float* __restrict__ background,
-    const float* __restrict__ final_Ts,
-    const int* __restrict__ final_index,
     const float* __restrict__ v_output,
-    const float* __restrict__ v_output_alpha,
-    float2* __restrict__ v_xy,
+    float2* __restrict__ v_xyz,
     float3* __restrict__ v_conic,
     float* __restrict__ v_rgb,
     float* __restrict__ v_opacity
-    // float* __restrict__ workspace 
 ) {
     
     auto block = cg::this_thread_block();
-    int32_t tile_id = blockIdx.y * tile_bounds.x + blockIdx.x;
-    unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
-    unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
-
-    const float px = (float)j;
-    const float py = (float)i;
-    const int32_t pix_id = min(i * img_size.x + j, img_size.x * img_size.y - 1);
-
-    // keep not rasterizing threads around for reading data
-    const bool inside = (i < img_size.y && j < img_size.x);
-    // which gaussians get gradients for this pixel
+    int32_t tile_id =
+        block.group_index().z * tile_bounds.x * tile_bounds.y + block.group_index().y * tile_bounds.x + block.group_index().x;
+        
     const int2 range = tile_bins[tile_id];
-    // df/d_out for this pixel
-    const float *v_out = &(v_output[CHANNELS * pix_id]);
+    const int2 pts_range = tile_bins_pts[tile_id];
  
-    const int bin_final = inside ? final_index[pix_id] : 0;  // inside 为false
     const int tr = block.thread_rank();
-    const int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-    // extern __shared__ int s[];
-    // int32_t* id_batch = (int32_t*)s;
-    // float3* xy_opacity_batch = (float3*)&id_batch[BLOCK_SIZE];
-    // float3* conic_batch = (float3*)&xy_opacity_batch[BLOCK_SIZE];
-    // float* rgbs_batch = (float*)&conic_batch[BLOCK_SIZE]; 
-    __shared__ int32_t id_batch[BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[BLOCK_SIZE];
-    __shared__ float3 conic_batch[BLOCK_SIZE];
-    // __shared__ float rgbs_batch[BLOCK_SIZE * CHANNELS]; // 颜色直接从全局内存中读
+    const int num_batches = (range.y - range.x + N_THREADS - 1) / N_THREADS;
+    int num_points_rendering = (pts_range.y - pts_range.x + N_THREADS - 1) / N_THREADS;
 
-    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
-    const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
+     // df/d_out for this pixel
+     const float *v_out = &(v_output[CHANNELS * pix_id]);
+
+    __shared__ int32_t id_batch[N_THREADS];
+    __shared__ float4 xyz_opacity_batch[N_THREADS];
+    __shared__ float conic_batch[N_THREADS*6];
+    // 将全部的数据放入高斯点信息放入共享内存中，容量不够；颜色直接从全局内存中读；to-do:一个替代做法是只渲染有限个，再最后加一个线性层
+    // __shared__ float rgbs_batch[BLOCK_SIZE * CHANNELS];
+
+    // cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    // const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
 
     for (int b = 0; b < num_batches; ++b) {
         block.sync();
-        const int batch_end = range.y - 1 - BLOCK_SIZE * b;
-        int batch_size = min(BLOCK_SIZE, batch_end + 1 - range.x);
-        const int idx = batch_end - tr;
-        if (idx >= range.x) {
+
+        int batch_start = range.x + N_THREADS * b; // 
+        int idx = batch_start + tr;
+
+        if (idx < range.y) {
             int32_t g_id = gaussians_ids_sorted[idx];
             id_batch[tr] = g_id;  // id_batch, xy_opacity_batch, conic_batch, rgbs_batch
-            const float2 xy = xys[g_id];
+            const float3 xyz = xys[g_id];
             const float opac = opacities[g_id];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g_id];
+            xy_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
+            PRAGMA_UNROLL
+            for (int i = 0; i < 6; ++i) {
+                conic_batch[tr*6 + i] = conics[g_id*6 + i];
+            }
             // for(int c = 0; c < CHANNELS; ++c)
             //     rgbs_batch[tr*CHANNELS + c] = rgbs[g_id*CHANNELS + c];
         }
 
         block.sync();
 
-        for (int t = max(0,batch_end - warp_bin_final); t < batch_size; ++t) {
-            int valid = inside;
-            if (batch_end - t > bin_final) {
-                valid = 0;
+        int num_gaussians_curr_batch = min(N_THREADS,range.y - batch_start);
+        for(int b_p = 0; b_p < num_points_rendering; ++b_p){
+            // 先确定当前线程是渲染哪一个像素
+            int pts_batch_start = pts_range.x + N_THREADS * b_p;
+            int pts_idx = pts_batch_start + tr;
+
+            int render_pixel_inside  = 1;
+            if (pts_idx >= pts_range.y) {
+                render_pixel_inside = 0;
             }
-            float alpha;
-            float opac;
-            float2 delta;
-            float3 conic;
-            float vis;
-
-            if(valid){
-                conic = conic_batch[t];
-                float3 xy_opac = xy_opacity_batch[t];
-                opac = xy_opac.z;
-                delta = {xy_opac.x - px, xy_opac.y - py};
-                float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                    conic.z * delta.y * delta.y) +
-                    conic.y * delta.x * delta.y;
-                vis = __expf(-sigma);
-                alpha = min(1.f, opac * vis);
-                if (sigma < 0.f || alpha < 1.f / 255.f) {
-                    valid = 0;
-                }
+            float3 point_pts = {0.0f,0.0f,0.0f};
+            float v_out = 0.0f;
+            if (render_pixel_inside) {
+                point_pts = pts[pts_idx];
+                v_out = v_output[pts_idx];
             }
-            
-            // if all threads are inactive in this warp, skip this loop
-            if(!warp.any(valid)){
-                continue;
-            }
+        
+            backend_render_one_pixel_of_one_batch_gaussian(
+                point_pts,
+                v_out,
+                id_batch,
+                conic_batch,
+                xyz_opacity_batch,
+                colors,
+                num_gaussians_curr_batch,
+                render_pixel_inside,
+                v_xyz,
+                v_conic,
+                v_rgb,
+                v_opacity,
+            );
 
-            float v_rgb_local[CHANNELS] = {0.f};
-            float3 v_conic_local = {0.f, 0.f, 0.f};
-            float2 v_xy_local = {0.f, 0.f};
-            float v_opacity_local = 0.f;
-            if(valid){
-                // compute the current T for this gaussian
-                //const float ra = 1.f / (1.f - alpha);
-                // T *= ra;
-                // update v_rgb for this gaussian
-                const float fac = alpha;
-                PRAGMA_UNROLL
-                for (int c = 0; c < CHANNELS; ++c) {
-                    v_rgb_local[c] = fac * v_out[c];
-                }
-                
-                float v_alpha = 0.f;
-                int32_t g = id_batch[t];
-                const float *c_ptr = rgbs + g * CHANNELS; 
-                PRAGMA_UNROLL
-                for (int c = 0; c < CHANNELS; ++c){
-                    v_alpha += c_ptr[c] * v_out[c];
-                }
-
-                const float v_sigma = -opac * vis * v_alpha;
-                v_conic_local = {0.5f * v_sigma * delta.x * delta.x, 
-                                 0.5f * v_sigma * delta.x * delta.y, 
-                                 0.5f * v_sigma * delta.y * delta.y};
-                v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y), 
-                              v_sigma * (conic.y * delta.x + conic.z * delta.y)};
-                v_opacity_local = vis * v_alpha;
-            }
-            warpSum<CHANNELS, float>(v_rgb_local, warp);
-            warpSum3(v_conic_local, warp);
-            warpSum2(v_xy_local, warp);
-            warpSum(v_opacity_local, warp);
-            if (warp.thread_rank() == 0) {
-                int32_t g = id_batch[t];
-                float *v_rgb_ptr = (float *)(v_rgb) + CHANNELS * g;
-                PRAGMA_UNROLL
-                for (int c = 0; c < CHANNELS; ++c) {
-                    atomicAdd(v_rgb_ptr + c, v_rgb_local[c]);
-                }
-
-                float *v_conic_ptr = (float *)(v_conic) + 3 * g;
-                atomicAdd(v_conic_ptr, v_conic_local.x);
-                atomicAdd(v_conic_ptr + 1, v_conic_local.y);
-                atomicAdd(v_conic_ptr + 2, v_conic_local.z);
-
-                float *v_xy_ptr = (float *)(v_xy) + 2 * g;
-                atomicAdd(v_xy_ptr, v_xy_local.x);
-                atomicAdd(v_xy_ptr + 1, v_xy_local.y);
-
-                atomicAdd(v_opacity + g, v_opacity_local);
-            }
         }
+        
     }
 }
 
-// __global__ void nd_rasterize_backward_sum_kernel(
-//     const dim3 tile_bounds,
-//     const dim3 img_size,
-//     const unsigned channels,
-//     const int32_t* __restrict__ gaussians_ids_sorted,
-//     const int2* __restrict__ tile_bins,
-//     const float2* __restrict__ xys,
-//     const float3* __restrict__ conics,
-//     const float* __restrict__ rgbs,
-//     const float* __restrict__ opacities,
-//     const float* __restrict__ background,
-//     const float* __restrict__ final_Ts,
-//     const int* __restrict__ final_index,
-//     const float* __restrict__ v_output,
-//     const float* __restrict__ v_output_alpha,
-//     float2* __restrict__ v_xy,
-//     float3* __restrict__ v_conic,
-//     float* __restrict__ v_rgb,
-//     float* __restrict__ v_opacity,
-//     float* __restrict__ workspace
-// ) {
-//     if (channels > MAX_REGISTER_CHANNELS && workspace == nullptr) {
-//         return;
-//     }
-//     // current naive implementation where tile data loading is redundant
-//     // TODO tile data should be shared between tile threads
-//     int32_t tile_id = blockIdx.y * tile_bounds.x + blockIdx.x;
-//     unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
-//     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
-//     float px = (float)j;
-//     float py = (float)i;
-//     int32_t pix_id = i * img_size.x + j;
+__device__ void backward_one_pixel_of_one_batch_gaussian(
+    const float3 point, // 输出像素的位置
+    const float* __restrict__ v_out, // 输出的像素的梯度
+    const int32_t* id_batch, 
+    const float* conic_batch, 
+    const float4* xyz_opacity_batch, 
+    const float* __restrict__ colors,
+    const int num_gaussians,
+    const int render_pixel_inside, // 当前的这个点渲染是否有效
+    // out
+    float3* __restrict__ v_xyz,
+    float* __restrict__ v_conic,
+    float* __restrict__ v_rgb,
+    float* __restrict__ v_opacity
+){
 
-//     // return if out of bounds
-//     if (i >= img_size.y || j >= img_size.x) {
-//         return;
-//     }
+    // 计算一个像素的梯度对one_batch_gaussian, 要写整个batch_size个高斯点的梯度，如何优化, 
+    // 使用线程束优化， 先在线程之间 reduce， 避免了每个线程都对主内存进行写
 
-//     // which gaussians get gradients for this pixel
-//     int2 range = tile_bins[tile_id];
-//     // df/d_out for this pixel
-//     const float *v_out = &(v_output[channels * pix_id]);
-//     // const float v_out_alpha = v_output_alpha[pix_id];
-//     // this is the T AFTER the last gaussian in this pixel
-//     float T_final = final_Ts[pix_id];
-//     float T = T_final;
-//     // the contribution from gaussians behind the current one
-//     float buffer[MAX_REGISTER_CHANNELS] = {0.f};
-//     float *S;
-//     if (channels <= MAX_REGISTER_CHANNELS) {
-//         S = &buffer[0];
-//     } else {
-//         S = &workspace[channels * pix_id];
-//     }
-//     int bin_final = final_index[pix_id];
+    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
 
-//     // iterate backward to compute the jacobians wrt rgb, opacity, mean2d, and
-//     // conic recursively compute T_{n-1} from T_n, where T_i = prod(j < i) (1 -
-//     // alpha_j), and S_{n-1} from S_n, where S_j = sum_{i > j}(rgb_i * alpha_i *
-//     // T_i) df/dalpha_i = rgb_i * T_i - S_{i+1| / (1 - alpha_i)
-//     for (int idx = bin_final - 1; idx >= range.x; --idx) {
-//         const int32_t g = gaussians_ids_sorted[idx];
-//         const float3 conic = conics[g];
-//         const float2 center = xys[g];
-//         const float2 delta = {center.x - px, center.y - py};
-//         const float sigma =
-//             0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
-//             conic.y * delta.x * delta.y;
-//         if (sigma < 0.f) {
-//             continue;
-//         }
-//         const float opac = opacities[g];
-//         const float vis = __expf(-sigma);
-//         const float alpha = min(1.f, opac * vis);
-//         if (alpha < 1.f / 255.f) {
-//             continue;
-//         }
+    for (int t = 0; t < num_gaussians; ++t) {
+        int valid = render_pixel_inside;
+        float* conic = &(conic_batch[6 * t]);
+        float3 xyz_opac = xyz_opacity_batch[t];
+        float opac = xyz_opac.w;
 
-//         // compute the current T for this gaussian
-//         const float ra = 1.f / (1.f - alpha);
-//         T *= ra;
-//         // rgb = rgbs[g];
-//         // update v_rgb for this gaussian
-//         const float fac = alpha;
-//         float v_alpha = 0.f;
-//         for (int c = 0; c < channels; ++c) {
-//             // gradient wrt rgb
-//             atomicAdd(&(v_rgb[channels * g + c]), fac * v_out[c]);
-//             // contribution from this pixel
-//             v_alpha += rgbs[channels * g + c] * v_out[c];
-//             // contribution from background pixel
-//             // v_alpha += -T_final * ra * background[c] * v_out[c];
-//             // update the running sum
-//             // S[c] += rgbs[channels * g + c] * fac;
-//         }
-//         // v_alpha += T_final * ra * v_out_alpha;
-//         // update v_opacity for this gaussian
-//         atomicAdd(&(v_opacity[g]), vis * v_alpha);
+        const float3 delta = {xyz_opac.x - point.x, xyz_opac.y - point.y, xyz_opac.z - point.z};
 
-//         // compute vjps for conics and means
-//         // d_sigma / d_delta = conic * delta
-//         // d_sigma / d_conic = delta * delta.T
-//         const float v_sigma = -opac * vis * v_alpha;
+        // calculate sigma in 3D
+        const float sigma = 0.5f * (conic[0] * delta.x * delta.x +
+                                    conic[3] * delta.y * delta.y +
+                                    conic[5] * delta.z * delta.z) +
+                            conic[1] * delta.x * delta.y +
+                            conic[2] * delta.x * delta.z +
+                            conic[4] * delta.y * delta.z;
 
-//         atomicAdd(&(v_conic[g].x), 0.5f * v_sigma * delta.x * delta.x);
-//         atomicAdd(&(v_conic[g].y), 0.5f * v_sigma * delta.x * delta.y);
-//         atomicAdd(&(v_conic[g].z), 0.5f * v_sigma * delta.y * delta.y);
-//         atomicAdd(
-//             &(v_xy[g].x), v_sigma * (conic.x * delta.x + conic.y * delta.y)
-//         );
-//         atomicAdd(
-//             &(v_xy[g].y), v_sigma * (conic.y * delta.x + conic.z * delta.y)
-//         );
-//     }
-// }
+        float vis = __expf(-sigma);
+        float alpha = opac * vis;
 
+        if (sigma < 0.f) {
+            valid = 0;
+        }
+        
+        // todo: 即使这里加了一个判断，线程间一定会出现不同步，这里的 warp 判断作用感觉不大
+        // bingo: 作用是 warp.thread_rank() == 0这个写入线程一定会走到最后
+        // if all threads are inactive in this warp, skip this loop； 
+        if(!warp.any(valid)){
+            continue;
+        }
+
+        float v_rgb_local[CHANNELS] = {0.f};
+        float v_conic_local[6] = {0.f};
+        float3 v_xyz_local = {0.f, 0.f, 0.f};
+        float v_opacity_local = 0.f;
+        if(valid){
+            // 对一个高斯点的rgb颜色的导数
+            const float fac = vis;
+            PRAGMA_UNROLL
+            for (int c = 0; c < CHANNELS; ++c) {
+                v_rgb_local[c] = fac * v_out[c];
+            }
+            
+            // 对alpha，alpha = opac * vis // alpha中间变量
+            float v_alpha = 0.f;
+            int32_t g = id_batch[t];
+            const float *c_ptr = rgbs + g * CHANNELS; 
+            PRAGMA_UNROLL
+            for (int c = 0; c < CHANNELS; ++c){
+                v_alpha += c_ptr[c] * v_out[c];
+            }
+            
+            // 对 sigma 协方差矩阵的逆的导数
+            const float v_sigma = -opac * vis * v_alpha;
+
+            // 参照前面的calculate sigma in 3D求逆; 是否每一项都要 0.5f? 对称矩阵
+            v_conic_local[0] = 0.5f * v_sigma * delta.x * delta.x;
+            v_conic_local[1] = 0.5f * v_sigma * delta.x * delta.y;
+            v_conic_local[2] = 0.5f * v_sigma * delta.x * delta.z;
+            v_conic_local[3] = 0.5f * v_sigma * delta.y * delta.y;
+            v_conic_local[4] = 0.5f * v_sigma * delta.y * delta.z;
+            v_conic_local[5] = 0.5f * v_sigma * delta.z * delta.z;
+
+            // 同样参照前面的calculate sigma in 3D求逆;
+            v_xyz_local = {
+                v_sigma * (conic[0] * delta.x + conic[1] * delta.y + conic[2] * delta.z),
+                v_sigma * (conic[1] * delta.x + conic[3] * delta.y + conic[4] * delta.z),
+                v_sigma * (conic[2] * delta.x + conic[4] * delta.y + conic[5] * delta.z)
+            };
+
+            v_opacity_local = vis * v_alpha;
+        }
+        // 线程束间 reduce
+        warpSum<CHANNELS, float>(v_rgb_local, warp);
+        warpSum<6, float>(v_conic_local, warp);
+        warpSum3(v_xyz_local, warp);
+        warpSum(v_opacity_local, warp);
+        // 使用一个线程写回主内存
+        if (warp.thread_rank() == 0) {
+            int32_t g = id_batch[t];
+
+            float *v_rgb_ptr = (float *)(v_rgb) + CHANNELS * g;
+            PRAGMA_UNROLL
+            for (int c = 0; c < CHANNELS; ++c) {
+                atomicAdd(v_rgb_ptr + c, v_rgb_local[c]);
+            }
+
+            float *v_conic_ptr = (float *)(v_conic) + 6 * g;
+            PRAGMA_UNROLL
+            for (int i = 0; i < 6; ++i){
+                atomicAdd(v_conic_ptr + i, v_conic_local[i]);
+            }
+          
+            float *v_xyz_ptr = (float *)(v_xyz) + 3 * g;
+            atomicAdd(v_xy_ptr, v_xyz_local.x);
+            atomicAdd(v_xy_ptr + 1, v_xyz_local.y);
+            atomicAdd(v_xy_ptr + 2, v_xyz_local.z);
+
+            atomicAdd(v_opacity + g, v_opacity_local);
+        }
+    }
+}
 
 
 __global__ void rasterize_backward_sum_general_kernel(
@@ -1159,17 +1106,14 @@ __global__ void project_gaussians_backward_kernel(
     const float3* __restrict__ scales,
     const float glob_scale,
     const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,
-    const float* __restrict__ projmat,
-    const float4 intrins,
-    const dim3 img_size,
+    const float3 img_size,
     const float* __restrict__ cov3d,
     const int* __restrict__ radii,
-    const float3* __restrict__ conics,
-    const float2* __restrict__ v_xy,
+    const float* __restrict__ conics,
+    const float3* __restrict__ v_xyz,
     const float* __restrict__ v_depth,
-    const float3* __restrict__ v_conic,
-    float3* __restrict__ v_cov2d,
+    const float* __restrict__ v_conic,
+    // output
     float* __restrict__ v_cov3d,
     float3* __restrict__ v_mean3d,
     float3* __restrict__ v_scale,
@@ -1179,35 +1123,20 @@ __global__ void project_gaussians_backward_kernel(
     if (idx >= num_points || radii[idx] <= 0) {
         return;
     }
-    float3 p_world = means3d[idx];
-    float fx = intrins.x;
-    float fy = intrins.y;
-    // float cx = intrins.z;
-    // float cy = intrins.w;
-    // get v_mean3d from v_xy
-    v_mean3d[idx] = project_pix_vjp(projmat, p_world, img_size, v_xy[idx]);
+    
+    v_mean3d[idx].x = v_xyz[idx].x * (0.5f * img_size.x);
+    v_mean3d[idx].y = v_xyz[idx].y * (0.5f * img_size.y);
+    v_mean3d[idx].z = v_xyz[idx].z * (0.5f * img_size.z);
 
-    // get z gradient contribution to mean3d gradient
-    // z = viemwat[8] * mean3d.x + viewmat[9] * mean3d.y + viewmat[10] *
-    // mean3d.z + viewmat[11]
-    float v_z = v_depth[idx];
-    v_mean3d[idx].x += viewmat[8] * v_z;
-    v_mean3d[idx].y += viewmat[9] * v_z;
-    v_mean3d[idx].z += viewmat[10] * v_z;
+    // get v_cov3d and write it to v_cov3d
+    float *cur_conics = &(conics[6 * idx]);
+    float *cur_v_conic = &(v_conic[6 * idx]);
+    float cur_v_cov3d[6];
+    cov3d_to_conic_vjp(cur_conics[idx], cur_v_conic[idx], cur_v_cov3d[idx]);
+    for (int i = 0; i < 6; ++i) {
+        v_cov3d[6 * idx + i] = cur_v_cov3d[i];
+    }
 
-    // get v_cov2d
-    cov2d_to_conic_vjp(conics[idx], v_conic[idx], v_cov2d[idx]);
-    // get v_cov3d (and v_mean3d contribution)
-    project_cov3d_ewa_vjp(
-        p_world,
-        &(cov3d[6 * idx]),
-        viewmat,
-        fx,
-        fy,
-        v_cov2d[idx],
-        v_mean3d[idx],
-        &(v_cov3d[6 * idx])
-    );
     // get v_scale and v_quat
     scale_rot_to_cov3d_vjp(
         scales[idx],

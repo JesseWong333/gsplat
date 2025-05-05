@@ -12,7 +12,7 @@ import gsplat.cuda as _C
 def map_gaussian_to_intersects(
     num_points: int,
     num_intersects: int,
-    xys: Float[Tensor, "batch 2"],
+    xys: Float[Tensor, "batch 3"],
     depths: Float[Tensor, "batch 1"],
     radii: Float[Tensor, "batch 1"],
     cum_tiles_hit: Float[Tensor, "batch 1"],
@@ -121,7 +121,7 @@ def compute_cumulative_intersects(
 def bin_and_sort_gaussians(
     num_points: int,
     num_intersects: int,
-    xys: Float[Tensor, "batch 2"],
+    xys: Float[Tensor, "batch 3"],
     depths: Float[Tensor, "batch 1"],
     radii: Float[Tensor, "batch 1"],
     cum_tiles_hit: Float[Tensor, "batch 1"],
@@ -143,7 +143,7 @@ def bin_and_sort_gaussians(
     Args:
         num_points (int): number of gaussians.
         num_intersects (int): cumulative number of total gaussian intersections
-        xys (Tensor): x,y locations of 2D gaussian projections.
+        xys (Tensor): x,y, z locations of 3D gaussian projections.
         depths (Tensor): z depth of gaussians.
         radii (Tensor): radii of 2D gaussian projections.
         cum_tiles_hit (Tensor): list of cumulative tiles hit.
@@ -159,10 +159,41 @@ def bin_and_sort_gaussians(
         - **tile_bins** (Tensor): range of gaussians hit per tile.
     """
     isect_ids, gaussian_ids = map_gaussian_to_intersects(
-        num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds  # gaussian_ids 是按照个数复制的
+        num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds  # isect_ids, gaussian_ids长度都是扩充后的长度， isect_ids存储tile | depth id； gaussian_ids存储原高斯点的索引
     )
     isect_ids_sorted, sorted_indices = torch.sort(isect_ids)
     gaussian_ids_sorted = torch.gather(gaussian_ids, 0, sorted_indices)
-    # tile_bins = get_tile_bin_edges(num_intersects, isect_ids_sorted)
-    tile_bins = get_tile_bin_edges(tile_bounds[0] * tile_bounds[1], num_intersects, isect_ids_sorted) # 我觉得这里可能是个bug, 
+    # tile_bins = get_tile_bin_edges(num_intersects, isect_ids_sorted)  # 我觉得这里可能是个bug, 
+    tile_bins = get_tile_bin_edges(tile_bounds[0] * tile_bounds[1] * tile_bounds[2], num_intersects, isect_ids_sorted) # range of gaussians IDs hit per tile 
     return isect_ids, gaussian_ids, isect_ids_sorted, gaussian_ids_sorted, tile_bins
+
+
+def bin_pts(
+    pts: Float[Tensor, "batch 3"],
+    tile_bounds: Tuple[int, int, int],
+    block: Tuple[int, int, int]
+    ) -> Tuple[
+        Float[Tensor, "batch 3"],
+        Float[Tensor, "batch 1"],
+        Float[Tensor, "batch 2"],
+    ]:
+    """Bin points to tile IDs.
+    
+    # 现在要渲染的就是 pts 大小, 类似于高斯点的做法，但是无需复制
+    # 1. 计算每个点归属的 tile_ID pytorch
+    # 2. tile_ID list 进行排序， pts相应排序
+    # 3. 对tile_ID list调用 kernel, 类似于get_tile_bin_edges, 得到pts的tile_bin
+    # pts: N * 3
+    """
+    x = pts[:, 0] // block[0]  # N  # todo: bug 这里应该减去 pc_min
+    y = pts[:, 1] // block[1]
+    z = pts[:, 2] // block[2]
+    tile_ids = tile_bounds[0] *tile_bounds[1] * z + tile_bounds[0] * y + x # N
+    tile_ids_sorted, sorted_indices = torch.sort(tile_ids)
+    pts_sorted = pts[sorted_indices]
+    
+    inv_sorted_indices = torch.zeros_like(sorted_indices)
+    inv_sorted_indices.scatter_(0, sorted_indices, torch.arange(sorted_indices.size(0)))
+    
+    tile_bin = _C.get_tile_bin_edges_pts(tile_bounds[0] * tile_bounds[1] * tile_bounds[2], pts.shape[0], tile_ids_sorted.contiguous()) # tile_bounds[0] * tile_bounds[1] * tile_bounds[2], 2
+    return pts_sorted, sorted_indices, inv_sorted_indices, tile_bin

@@ -44,6 +44,37 @@ inline __device__ void get_tile_bbox(
     get_bbox(tile_center, tile_radius, tile_bounds, tile_min, tile_max);
 }
 
+inline __device__ void get_tile_bbox_3d(
+    const float3 point_center,
+    const float point_radius,
+    const dim3 tile_bounds,
+    uint3 &tile_min,
+    uint3 &tile_max
+){
+    float3 tile_center = {
+        point_center.x / (float)BLOCK_X,
+        point_center.y / (float)BLOCK_Y,
+        point_center.z / (float)BLOCK_Z
+    };
+
+    float3 tile_radius = {
+        point_radius / (float)BLOCK_X,
+        point_radius / (float)BLOCK_Y,
+        point_radius / (float)BLOCK_Z
+    };
+
+    // Calculate the bounding box in tile space
+    tile_min.x = min(max(0, (int)(tile_center.x - tile_radius.x)), tile_bounds.x);
+    tile_max.x = min(max(0, (int)(tile_center.x + tile_radius.x + 1)), tile_bounds.x);
+
+    tile_min.y = min(max(0, (int)(tile_center.y - tile_radius.y)), tile_bounds.y);
+    tile_max.y = min(max(0, (int)(tile_center.y + tile_radius.y + 1)), tile_bounds.y);
+
+    tile_min.z = min(max(0, (int)(tile_center.z - tile_radius.z)), tile_bounds.z);
+    tile_max.z = min(max(0, (int)(tile_center.z + tile_radius.z + 1)), tile_bounds.z);
+
+}
+
 inline __device__ bool
 compute_cov2d_bounds(const float3 cov2d, float3 &conic, float &radius) {
     // find eigenvalues of 2d covariance matrix
@@ -69,18 +100,72 @@ compute_cov2d_bounds(const float3 cov2d, float3 &conic, float &radius) {
     return true;
 }
 
+inline __device__ bool
+compute_cov3d_bounds(const float cov3d[6], float conic[6]) {
+    // cov3d[0] = x (m11), cov3d[1] = y (m12), cov3d[2] = z (m13)
+    // cov3d[3] = w (m22), cov3d[4] = u (m23), cov3d[5] = v (m33)
+
+    // 计算 3x3 矩阵的行列式
+    float det = cov3d[0] * (cov3d[3] * cov3d[5] - cov3d[4] * cov3d[4]) -
+                cov3d[1] * (cov3d[1] * cov3d[5] - cov3d[2] * cov3d[4]) +
+                cov3d[2] * (cov3d[1] * cov3d[4] - cov3d[2] * cov3d[3]);
+
+    if (det == 0.f) {
+        return false;  // 矩阵不可逆
+    }
+
+    float inv_det = 1.f / det;
+    // 计算逆矩阵（对称矩阵，只存储上三角部分）
+    conic[0] = (cov3d[3] * cov3d[5] - cov3d[4] * cov3d[4]) * inv_det;  // m11
+    conic[1] = (cov3d[2] * cov3d[4] - cov3d[1] * cov3d[5]) * inv_det;  // m12
+    conic[2] = (cov3d[1] * cov3d[4] - cov3d[2] * cov3d[3]) * inv_det;  // m13
+    conic[3] = (cov3d[0] * cov3d[5] - cov3d[2] * cov3d[2]) * inv_det;  // m22
+    conic[4] = (cov3d[2] * cov3d[1] - cov3d[0] * cov3d[4]) * inv_det;  // m23
+    conic[5] = (cov3d[0] * cov3d[3] - cov3d[1] * cov3d[1]) * inv_det;  // m33
+    
+    return true;
+}
+
 // compute vjp from df/d_conic to df/c_cov2d
 inline __device__ void cov2d_to_conic_vjp(
     const float3 &conic, const float3 &v_conic, float3 &v_cov2d
 ) {
     // conic = inverse cov2d
-    // df/d_cov2d = -conic * df/d_conic * conic
+    // df/d_cov2d = -conic * df/d_conic * conic  # ？？？
     glm::mat2 X = glm::mat2(conic.x, conic.y, conic.y, conic.z);
     glm::mat2 G = glm::mat2(v_conic.x, v_conic.y, v_conic.y, v_conic.z);
     glm::mat2 v_Sigma = -X * G * X;
     v_cov2d.x = v_Sigma[0][0];
     v_cov2d.y = v_Sigma[1][0] + v_Sigma[0][1];
     v_cov2d.z = v_Sigma[1][1];
+}
+
+inline __device__ void cov3d_to_conic_vjp(
+    const float conic[6], const float v_conic[6], float v_cov3d[6]
+) {
+    // 构造对称矩阵X和G
+    glm::mat3 X(
+        conic[0], conic[1], conic[2],
+        conic[1], conic[3], conic[4],
+        conic[2], conic[4], conic[5]
+    );
+    glm::mat3 G(
+        v_conic[0], v_conic[1], v_conic[2],
+        v_conic[1], v_conic[3], v_conic[4],
+        v_conic[2], v_conic[4], v_conic[5]
+    );
+    
+    // 计算梯度矩阵
+    glm::mat3 temp = X * G;
+    glm::mat3 v_Sigma = -temp * X;
+    
+    // 提取上三角元素并处理对称性
+    v_cov3d[0] = v_Sigma[0][0];
+    v_cov3d[1] = v_Sigma[0][1] + v_Sigma[1][0];
+    v_cov3d[2] = v_Sigma[0][2] + v_Sigma[2][0];
+    v_cov3d[3] = v_Sigma[1][1];
+    v_cov3d[4] = v_Sigma[1][2] + v_Sigma[2][1];
+    v_cov3d[5] = v_Sigma[2][2];
 }
 
 // helper for applying R * p + T, expect mat to be ROW MAJOR

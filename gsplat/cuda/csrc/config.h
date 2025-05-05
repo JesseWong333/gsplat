@@ -1,10 +1,11 @@
 #define BLOCK_X 16
 #define BLOCK_Y 16
-#define BLOCK_SIZE (BLOCK_X * BLOCK_Y)
+#define BLOCK_Z 16
+#define BLOCK_SIZE (BLOCK_X * BLOCK_Y * BLOCK_Z)
 #define N_THREADS 256
 
 #define MAX_REGISTER_CHANNELS 256
-#define CHANNELS 32
+#define CHANNELS 18
 
 #define CUDA_CALL(x)                                                           \
     do {                                                                       \
