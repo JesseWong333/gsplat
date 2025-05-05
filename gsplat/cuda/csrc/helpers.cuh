@@ -247,31 +247,6 @@ inline __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
     );
 }
 
-// inline __device__ glm::mat3 rotor_to_rotmat(const float4 rot) {
-//     // quat to rotation matrix
-//     float s = rsqrtf(
-//         rot.x * rot.x + rot.y * rot.y + rot.z * rot.z + rot.w * rot.w
-//     );
-//     float x = rot.x * s;
-//     float y = rot.y * s;
-//     float z = rot.z * s;
-//     float w = rot.w * s;
-
-//     // glm matrices are column-major
-//     return glm::mat3(
-//         x * x - y * y - z * z + w * w,
-//         -2.f * (x * y + w * z),
-//         2.f * (y * w - x * z),
-//         2.f * (x * y - w * z),
-//         x * x - y * y + z * z - w * w,
-//         -2.f * (y * z + w * x),
-//         2.f * (y * w + x * z),
-//         2.f * (x * w - y * z),
-//         x * x + y * y - z * z - w * w
-//     );
-// }
-
-
 
 inline __device__ float4
 quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_R) {

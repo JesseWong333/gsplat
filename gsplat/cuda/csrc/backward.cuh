@@ -24,114 +24,7 @@ __global__ void project_gaussians_backward_kernel(
     float4* __restrict__ v_quat
 );
 
-// compute jacobians of output image wrt binned and sorted gaussians
-__global__ void nd_rasterize_backward_kernel(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const unsigned channels,
-    const int32_t* __restrict__ gaussians_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float* __restrict__ rgbs,
-    const float* __restrict__ opacities,
-    const float* __restrict__ background,
-    const float* __restrict__ final_Ts,
-    const int* __restrict__ final_index,
-    const float* __restrict__ v_output,
-    const float* __restrict__ v_output_alpha,
-    float2* __restrict__ v_xy,
-    float3* __restrict__ v_conic,
-    float* __restrict__ v_rgb,
-    float* __restrict__ v_opacity,
-    float* __restrict__ workspace
-);
 
-__global__ void rasterize_backward_kernel(
-    const unsigned tile_bounds_x,
-    const unsigned tile_bounds_y,
-    const unsigned img_size_x,
-    const unsigned img_size_y,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ rgbs,
-    const float* __restrict__ opacities,
-    const float3& __restrict__ background,
-    const float* __restrict__ final_Ts,
-    const int* __restrict__ final_index,
-    const float3* __restrict__ v_output,
-    const float* __restrict__ v_output_alpha,
-    float2* __restrict__ v_xy,
-    float3* __restrict__ v_conic,
-    float3* __restrict__ v_rgb,
-    float* __restrict__ v_opacity
-);
-
-__global__ void rasterize_backward_sum_kernel(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ rgbs,
-    const float* __restrict__ opacities,
-    const float3& __restrict__ background,
-    const float* __restrict__ final_Ts,
-    const int* __restrict__ final_index,
-    const float3* __restrict__ v_output,
-    const float* __restrict__ v_output_alpha,
-    float2* __restrict__ v_xy,
-    float3* __restrict__ v_conic,
-    float3* __restrict__ v_rgb,
-    float* __restrict__ v_opacity
-);
-
-// __global__ void rasterize_1d_backward_sum_kernel(
-//     const dim3 tile_bounds,
-//     const dim3 img_size,
-//     const int32_t* __restrict__ gaussian_ids_sorted,
-//     const int2* __restrict__ tile_bins,
-//     const float2* __restrict__ xys,
-//     const float3* __restrict__ conics,
-//     const float* __restrict__ rgbs,
-//     const float* __restrict__ opacities,
-//     const float& __restrict__ background,
-//     const float* __restrict__ final_Ts,
-//     const int* __restrict__ final_index,
-//     const float* __restrict__ v_output,
-//     const float* __restrict__ v_output_alpha,
-//     float2* __restrict__ v_xy,
-//     float3* __restrict__ v_conic,
-//     float* __restrict__ v_rgb,
-//     float* __restrict__ v_opacity
-// );
-
-__global__ void rasterize_backward_sum_general_kernel(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ rgbs,
-    const float* __restrict__ opacities,
-    const float* __restrict__ betas,
-    const float3& __restrict__ background,
-    const float* __restrict__ final_Ts,
-    const int* __restrict__ final_index,
-    const float3* __restrict__ v_output,
-    const float* __restrict__ v_output_alpha,
-    float2* __restrict__ v_xy,
-    float3* __restrict__ v_conic,
-    float3* __restrict__ v_rgb,
-    float* __restrict__ v_opacity,
-    float* __restrict__ v_beta
-);
-
-// template <uint32_t channels>
 __global__ void nd_rasterize_backward_sum_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -152,16 +45,6 @@ __global__ void nd_rasterize_backward_sum_kernel(
     // float* __restrict__ workspace
 );
 
-__device__ void project_cov3d_ewa_vjp(
-    const float3 &mean3d,
-    const float *cov3d,
-    const float *viewmat,
-    const float fx,
-    const float fy,
-    const float3 &v_cov2d,
-    float3 &v_mean3d,
-    float *v_cov3d
-);
 
 __device__ void scale_rot_to_cov3d_vjp(
     const float3 scale,
@@ -170,30 +53,4 @@ __device__ void scale_rot_to_cov3d_vjp(
     const float *v_cov3d,
     float3 &v_scale,
     float4 &v_quat
-);
-
-__global__ void rasterize_video_backward_kernel(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const float time,
-    const float vis_thresold,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ rgbs,
-    const float* __restrict__ opacities,
-    const float* __restrict__ means_t,
-    const float* __restrict__ lambda,
-    const float3& __restrict__ background,
-    const float* __restrict__ final_Ts,
-    const int* __restrict__ final_index,
-    const float3* __restrict__ v_output,
-    const float* __restrict__ v_output_alpha,
-    float2* __restrict__ v_xy,
-    float3* __restrict__ v_conic,
-    float3* __restrict__ v_rgb,
-    float* __restrict__ v_opacity,
-    float* __restrict__ v_means_t,
-    float* __restrict__ v_lambda
 );

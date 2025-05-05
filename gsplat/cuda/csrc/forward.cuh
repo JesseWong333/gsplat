@@ -20,38 +20,7 @@ __global__ void project_gaussians_forward_kernel(
     int32_t* __restrict__ num_tiles_hit
 );
 
-// compute output color image from binned and sorted gaussians
-__global__ void rasterize_forward(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float3* __restrict__ out_img,
-    const float3& __restrict__ background
-);
 
-// compute output color image from binned and sorted gaussians
-__global__ void nd_rasterize_forward(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const unsigned channels,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float* __restrict__ out_img,
-    const float* __restrict__ background
-);
 
 __global__ void nd_rasterize_forward_sum(
     const dim3 tile_bounds,
@@ -70,16 +39,6 @@ __global__ void nd_rasterize_forward_sum(
     const float* __restrict__ background
 );
 
-// device helper to approximate projected 2d cov from 3d mean and cov
-__device__ float3 project_cov3d_ewa(
-    const float3 &mean3d,
-    const float *cov3d,
-    const float *viewmat,
-    const float fx,
-    const float fy,
-    const float tan_fovx,
-    const float tan_fovy
-);
 
 // device helper to get 3D covariance from scale and quat parameters
 __device__ void scale_rot_to_cov3d(
@@ -105,100 +64,3 @@ __global__ void get_tile_bin_edges_pts(
     const int num_pts, const int32_t* __restrict__ tile_ids_sorted, int2* __restrict__ tile_bins
 );
 
-__global__ void rasterize_forward(
-    const unsigned tile_bounds_x,
-    const unsigned tile_bounds_y,
-    const unsigned img_size_x,
-    const unsigned img_size_y,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float3* __restrict__ out_img,
-    const float3& __restrict__ background
-);
-
-__global__ void rasterize_forward_sum(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float3* __restrict__ out_img,
-    const float3& __restrict__ background
-);
-
-__global__ void rasterize_1d_forward_sum(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float* __restrict__ out_img,
-    const float& __restrict__ background
-);
-
-__global__ void rasterize_forward_sum_general(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ colors,
-    const float* __restrict__ opacities,
-    const float* __restrict__ betas,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float3* __restrict__ out_img,
-    const float3& __restrict__ background
-);
-
-__global__ void nd_rasterize_forward(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const unsigned channels,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float* __restrict__ out_img,
-    const float* __restrict__ background
-);
-
-__global__ void rasterize_video_forward(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const float time,
-    const float vis_thresold,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ colors,
-    const float* __restrict__ opacities,
-    const float* __restrict__ means_t,
-    const float* __restrict__ lambda,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float3* __restrict__ out_img,
-    const float3& __restrict__ background
-);
