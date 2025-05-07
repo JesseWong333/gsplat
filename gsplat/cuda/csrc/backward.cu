@@ -28,112 +28,9 @@ inline __device__ void warpSum(T *val, WarpT &warp) {
     }
 }
 
-
-__global__ void nd_rasterize_backward_sum_kernel(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const float3* __restrict__ pts,
-    const int32_t* __restrict__ gaussians_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const int2* __restrict__ tile_bins_pts,
-    const float3* __restrict__ xys,
-    const float* __restrict__ conics,
-    const float* __restrict__ rgbs,
-    const float* __restrict__ opacities,
-    const float* __restrict__ background,
-    const float* __restrict__ v_output,
-    float2* __restrict__ v_xyz,
-    float3* __restrict__ v_conic,
-    float* __restrict__ v_rgb,
-    float* __restrict__ v_opacity
-) {
-    
-    auto block = cg::this_thread_block();
-    int32_t tile_id =
-        block.group_index().z * tile_bounds.x * tile_bounds.y + block.group_index().y * tile_bounds.x + block.group_index().x;
-        
-    const int2 range = tile_bins[tile_id];
-    const int2 pts_range = tile_bins_pts[tile_id];
- 
-    const int tr = block.thread_rank();
-
-    const int num_batches = (range.y - range.x + N_THREADS - 1) / N_THREADS;
-    int num_points_rendering = (pts_range.y - pts_range.x + N_THREADS - 1) / N_THREADS;
-
-     // df/d_out for this pixel
-     const float *v_out = &(v_output[CHANNELS * pix_id]);
-
-    __shared__ int32_t id_batch[N_THREADS];
-    __shared__ float4 xyz_opacity_batch[N_THREADS];
-    __shared__ float conic_batch[N_THREADS*6];
-    // 将全部的数据放入高斯点信息放入共享内存中，容量不够；颜色直接从全局内存中读；to-do:一个替代做法是只渲染有限个，再最后加一个线性层
-    // __shared__ float rgbs_batch[BLOCK_SIZE * CHANNELS];
-
-    // cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
-    // const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
-
-    for (int b = 0; b < num_batches; ++b) {
-        block.sync();
-
-        int batch_start = range.x + N_THREADS * b; // 
-        int idx = batch_start + tr;
-
-        if (idx < range.y) {
-            int32_t g_id = gaussians_ids_sorted[idx];
-            id_batch[tr] = g_id;  // id_batch, xy_opacity_batch, conic_batch, rgbs_batch
-            const float3 xyz = xys[g_id];
-            const float opac = opacities[g_id];
-            xy_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
-            PRAGMA_UNROLL
-            for (int i = 0; i < 6; ++i) {
-                conic_batch[tr*6 + i] = conics[g_id*6 + i];
-            }
-            // for(int c = 0; c < CHANNELS; ++c)
-            //     rgbs_batch[tr*CHANNELS + c] = rgbs[g_id*CHANNELS + c];
-        }
-
-        block.sync();
-
-        int num_gaussians_curr_batch = min(N_THREADS,range.y - batch_start);
-        for(int b_p = 0; b_p < num_points_rendering; ++b_p){
-            // 先确定当前线程是渲染哪一个像素
-            int pts_batch_start = pts_range.x + N_THREADS * b_p;
-            int pts_idx = pts_batch_start + tr;
-
-            int render_pixel_inside  = 1;
-            if (pts_idx >= pts_range.y) {
-                render_pixel_inside = 0;
-            }
-            float3 point_pts = {0.0f,0.0f,0.0f};
-            float v_out = 0.0f;
-            if (render_pixel_inside) {
-                point_pts = pts[pts_idx];
-                v_out = v_output[pts_idx];
-            }
-        
-            backend_render_one_pixel_of_one_batch_gaussian(
-                point_pts,
-                v_out,
-                id_batch,
-                conic_batch,
-                xyz_opacity_batch,
-                colors,
-                num_gaussians_curr_batch,
-                render_pixel_inside,
-                v_xyz,
-                v_conic,
-                v_rgb,
-                v_opacity,
-            );
-
-        }
-        
-    }
-}
-
 __device__ void backward_one_pixel_of_one_batch_gaussian(
-    const float3 point, // 输出像素的位置
-    const float* __restrict__ v_out, // 输出的像素的梯度
+    float3 point, // 输出像素的位置
+    const float* v_out, // 输出的像素的梯度, channel维
     const int32_t* id_batch, 
     const float* conic_batch, 
     const float4* xyz_opacity_batch, 
@@ -150,15 +47,17 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
     // 计算一个像素的梯度对one_batch_gaussian, 要写整个batch_size个高斯点的梯度，如何优化, 
     // 使用线程束优化， 先在线程之间 reduce， 避免了每个线程都对主内存进行写
 
-    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    auto block = cg::this_thread_block();
+    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block); // "block" is undefined
 
     for (int t = 0; t < num_gaussians; ++t) {
         int valid = render_pixel_inside;
-        float* conic = &(conic_batch[6 * t]);
-        float3 xyz_opac = xyz_opacity_batch[t];
-        float opac = xyz_opac.w;
+        const float* conic = &(conic_batch[6 * t]);
+        const float4 xyz_opac = xyz_opacity_batch[t];
+        const float opac = xyz_opac.w;
 
         const float3 delta = {xyz_opac.x - point.x, xyz_opac.y - point.y, xyz_opac.z - point.z};
+        // printf("delta %.4f %.4f %.4f\n", delta.x, delta.y, delta.z);
 
         // calculate sigma in 3D
         const float sigma = 0.5f * (conic[0] * delta.x * delta.x +
@@ -167,9 +66,14 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
                             conic[1] * delta.x * delta.y +
                             conic[2] * delta.x * delta.z +
                             conic[4] * delta.y * delta.z;
+        
+        // printf("sigma %.4f \n", sigma); // sigma有很大的值
 
         float vis = __expf(-sigma);
-        float alpha = opac * vis;
+
+        // printf("vis %.6f \n", vis);
+
+        float alpha = opac * vis; // alpha 未使用，这里有一个 bug
 
         if (sigma < 0.f) {
             valid = 0;
@@ -188,7 +92,7 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
         float v_opacity_local = 0.f;
         if(valid){
             // 对一个高斯点的rgb颜色的导数
-            const float fac = vis;
+            const float fac = alpha;
             PRAGMA_UNROLL
             for (int c = 0; c < CHANNELS; ++c) {
                 v_rgb_local[c] = fac * v_out[c];
@@ -197,7 +101,7 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
             // 对alpha，alpha = opac * vis // alpha中间变量
             float v_alpha = 0.f;
             int32_t g = id_batch[t];
-            const float *c_ptr = rgbs + g * CHANNELS; 
+            const float *c_ptr = colors + g * CHANNELS; 
             PRAGMA_UNROLL
             for (int c = 0; c < CHANNELS; ++c){
                 v_alpha += c_ptr[c] * v_out[c];
@@ -221,6 +125,8 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
                 v_sigma * (conic[2] * delta.x + conic[4] * delta.y + conic[5] * delta.z)
             };
 
+            // printf("v_xyz_local %.2f %.2f %.2f\n", v_xyz_local.x, v_xyz_local.y, v_xyz_local.z);
+            
             v_opacity_local = vis * v_alpha;
         }
         // 线程束间 reduce
@@ -245,12 +151,111 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
             }
           
             float *v_xyz_ptr = (float *)(v_xyz) + 3 * g;
-            atomicAdd(v_xy_ptr, v_xyz_local.x);
-            atomicAdd(v_xy_ptr + 1, v_xyz_local.y);
-            atomicAdd(v_xy_ptr + 2, v_xyz_local.z);
+            atomicAdd(v_xyz_ptr, v_xyz_local.x);
+            atomicAdd(v_xyz_ptr + 1, v_xyz_local.y);
+            atomicAdd(v_xyz_ptr + 2, v_xyz_local.z);
 
             atomicAdd(v_opacity + g, v_opacity_local);
         }
+    }
+}
+
+__global__ void nd_rasterize_backward_sum_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const float3* __restrict__ pts,
+    const int32_t* __restrict__ gaussians_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const int2* __restrict__ tile_bins_pts,
+    const float3* __restrict__ xys,
+    const float* __restrict__ conics,
+    const float* __restrict__ colors,
+    const float* __restrict__ opacities,
+    const float* __restrict__ background,
+    const float* __restrict__ v_output,
+    float3* __restrict__ v_xyz,
+    float* __restrict__ v_conic,
+    float* __restrict__ v_rgb,
+    float* __restrict__ v_opacity
+) {
+    
+    auto block = cg::this_thread_block();
+    int32_t tile_id =
+        block.group_index().z * tile_bounds.x * tile_bounds.y + block.group_index().y * tile_bounds.x + block.group_index().x;
+        
+    const int2 range = tile_bins[tile_id];
+    const int2 pts_range = tile_bins_pts[tile_id];
+ 
+    const int tr = block.thread_rank();
+
+    const int num_batches = (range.y - range.x + N_THREADS - 1) / N_THREADS;
+    int num_points_rendering = (pts_range.y - pts_range.x + N_THREADS - 1) / N_THREADS;
+
+    __shared__ int32_t id_batch[N_THREADS];
+    __shared__ float4 xyz_opacity_batch[N_THREADS];
+    __shared__ float conic_batch[N_THREADS*6];
+    // 将全部的数据放入高斯点信息放入共享内存中，容量不够；颜色直接从全局内存中读；to-do:一个替代做法是只渲染有限个，再最后加一个线性层
+    // __shared__ float rgbs_batch[BLOCK_SIZE * CHANNELS];
+
+    // cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    // const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
+
+    for (int b = 0; b < num_batches; ++b) {
+        block.sync();
+
+        int batch_start = range.x + N_THREADS * b; // 
+        int idx = batch_start + tr;
+
+        if (idx < range.y) {
+            int32_t g_id = gaussians_ids_sorted[idx];
+            id_batch[tr] = g_id;  // id_batch, xy_opacity_batch, conic_batch, rgbs_batch
+            const float3 xyz = xys[g_id];
+            const float opac = opacities[g_id];
+            xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
+            PRAGMA_UNROLL
+            for (int i = 0; i < 6; ++i) {
+                conic_batch[tr*6 + i] = conics[g_id*6 + i];
+            }
+            // for(int c = 0; c < CHANNELS; ++c)
+            //     rgbs_batch[tr*CHANNELS + c] = rgbs[g_id*CHANNELS + c];
+        }
+
+        block.sync();
+
+        int num_gaussians_curr_batch = min(N_THREADS,range.y - batch_start);
+        for(int b_p = 0; b_p < num_points_rendering; ++b_p){
+            // 先确定当前线程是渲染哪一个像素
+            int pts_batch_start = pts_range.x + N_THREADS * b_p;
+            int pts_idx = pts_batch_start + tr;
+
+            int render_pixel_inside  = 1;
+            if (pts_idx >= pts_range.y) {
+                render_pixel_inside = 0;
+            }
+            float3 point_pts = {0.0f,0.0f,0.0f};
+            const float* v_out;
+            if (render_pixel_inside) {
+                point_pts = pts[pts_idx];
+                v_out = &(v_output[pts_idx*CHANNELS]);
+            }
+        
+            backward_one_pixel_of_one_batch_gaussian(
+                point_pts,
+                v_out,
+                id_batch,
+                conic_batch,
+                xyz_opacity_batch,
+                colors,
+                num_gaussians_curr_batch,
+                render_pixel_inside,
+                v_xyz,
+                v_conic,
+                v_rgb,
+                v_opacity
+            );
+
+        }
+        
     }
 }
 
@@ -284,10 +289,10 @@ __global__ void project_gaussians_backward_kernel(
     v_mean3d[idx].z = v_xyz[idx].z * (0.5f * img_size.z);
 
     // get v_cov3d and write it to v_cov3d
-    float *cur_conics = &(conics[6 * idx]);
-    float *cur_v_conic = &(v_conic[6 * idx]);
+    const float *cur_conics = &(conics[6 * idx]);
+    const float *cur_v_conic = &(v_conic[6 * idx]);
     float cur_v_cov3d[6];
-    cov3d_to_conic_vjp(cur_conics[idx], cur_v_conic[idx], cur_v_cov3d[idx]);
+    cov3d_to_conic_vjp(cur_conics, cur_v_conic, cur_v_cov3d);
     for (int i = 0; i < 6; ++i) {
         v_cov3d[6 * idx + i] = cur_v_cov3d[i];
     }

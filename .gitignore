@@ -121,5 +121,8 @@ venv.bak/
 compile_commands.json
 *.dump
 
+samples/
+
 test.py
 model.py
+GaussianSSC_gaplat.py

@@ -1,9 +1,7 @@
 from typing import Any
 import torch
 from .project_gaussians import project_gaussians
-from .rasterize import rasterize_gaussians
-from .project_gaussians_2d import project_gaussians_2d
-from .project_gaussians_2d_scale_rot import project_gaussians_2d_scale_rot
+
 from .rasterize_sum import rasterize_gaussians_sum
 from .utils import (
     map_gaussian_to_intersects,
@@ -12,7 +10,7 @@ from .utils import (
     compute_cov2d_bounds,
     get_tile_bin_edges,
 )
-from .sh import spherical_harmonics
+
 from .version import __version__
 import warnings
 

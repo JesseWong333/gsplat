@@ -171,6 +171,7 @@ def bin_and_sort_gaussians(
 def bin_pts(
     pts: Float[Tensor, "batch 3"],
     tile_bounds: Tuple[int, int, int],
+    lidar_mins: Tuple[float, float, float],
     block: Tuple[int, int, int]
     ) -> Tuple[
         Float[Tensor, "batch 3"],
@@ -185,15 +186,17 @@ def bin_pts(
     # 3. 对tile_ID list调用 kernel, 类似于get_tile_bin_edges, 得到pts的tile_bin
     # pts: N * 3
     """
-    x = pts[:, 0] // block[0]  # N  # todo: bug 这里应该减去 pc_min
+    x = pts[:, 0] // block[0]  # N 
     y = pts[:, 1] // block[1]
     z = pts[:, 2] // block[2]
     tile_ids = tile_bounds[0] *tile_bounds[1] * z + tile_bounds[0] * y + x # N
+    tile_ids = tile_ids.int()
+    
     tile_ids_sorted, sorted_indices = torch.sort(tile_ids)
     pts_sorted = pts[sorted_indices]
     
     inv_sorted_indices = torch.zeros_like(sorted_indices)
-    inv_sorted_indices.scatter_(0, sorted_indices, torch.arange(sorted_indices.size(0)))
+    inv_sorted_indices.scatter_(0, sorted_indices, torch.arange(sorted_indices.size(0)).to(sorted_indices.device))
     
     tile_bin = _C.get_tile_bin_edges_pts(tile_bounds[0] * tile_bounds[1] * tile_bounds[2], pts.shape[0], tile_ids_sorted.contiguous()) # tile_bounds[0] * tile_bounds[1] * tile_bounds[2], 2
     return pts_sorted, sorted_indices, inv_sorted_indices, tile_bin

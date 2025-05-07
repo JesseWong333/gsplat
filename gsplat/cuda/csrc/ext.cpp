@@ -10,7 +10,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("project_gaussians_backward", &project_gaussians_backward_tensor);
    
     // utils
-    m.def("compute_cov2d_bounds", &compute_cov2d_bounds_tensor);
     m.def("map_gaussian_to_intersects", &map_gaussian_to_intersects_tensor);
     m.def("get_tile_bin_edges", &get_tile_bin_edges_tensor);
     m.def("get_tile_bin_edges_pts", &get_tile_bin_edges_pts_tensor);

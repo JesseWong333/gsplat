@@ -1,6 +1,6 @@
 """Python bindings for custom Cuda functions"""
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 from jaxtyping import Float, Int
@@ -23,9 +23,10 @@ def rasterize_gaussians_sum(
     cube_x: int,
     cube_y: int,
     cube_z: int,
-    BLOCK_X: int=16,
-    BLOCK_Y: int=16,
-    BLOCK_Z: int=16, 
+    BLOCK_X: int,
+    BLOCK_Y: int,
+    BLOCK_Z: int, 
+    lidar_mins: Tuple[float, float, float],
     background: Optional[Float[Tensor, "channels"]] = None,
     return_alpha: Optional[bool] = False,
 ) -> Tensor:
@@ -70,9 +71,7 @@ def rasterize_gaussians_sum(
     
      
     if background is None:
-        background = torch.ones(
-            10, dtype=torch.float32, semantics=semantics.device  # 背景先不考虑，
-        )
+        background = torch.ones( 10 ).to(semantics.device)
 
     if xys.ndimension() != 2 or xys.size(1) != 3:
         raise ValueError("xys must have dimensions (N, 3)")
@@ -95,6 +94,7 @@ def rasterize_gaussians_sum(
         BLOCK_X, 
         BLOCK_Y,
         BLOCK_Z,
+        lidar_mins,
         background.contiguous(),
         return_alpha,
     )
@@ -117,9 +117,10 @@ class _RasterizeGaussiansSum(Function):
         cube_x: int,
         cube_y: int,
         cube_z: int,
-        BLOCK_X: int=16,
-        BLOCK_Y: int=16, 
-        BLOCK_Z: int=16,
+        BLOCK_X: int,
+        BLOCK_Y: int, 
+        BLOCK_Z: int,
+        lidar_mins: Tuple[float, float, float],
         background: Optional[Float[Tensor, "channels"]] = None,
         return_alpha: Optional[bool] = False,
     ) -> Tensor:
@@ -161,9 +162,10 @@ class _RasterizeGaussiansSum(Function):
                 tile_bounds,
             )
             
-            pts_sorted, sorted_indices, inv_sorted_indices, tile_bins_pts = bin_pts(pts, tile_bounds, block)
+            pts = pts - torch.tensor(lidar_mins).to(pts.device)
+            pts_sorted, sorted_indices, inv_sorted_indices, tile_bins_pts = bin_pts(pts, tile_bounds, lidar_mins, block)
       
-            rendering_out = _C.nd_rasterize_sum_forward(
+            rendering_out, _, _ = _C.nd_rasterize_sum_forward(
                 pts_sorted,
                 tile_bounds,
                 block,
@@ -235,7 +237,6 @@ class _RasterizeGaussiansSum(Function):
         ) = ctx.saved_tensors
         
         # v_out_img 是无序的梯度
-        sorted_indices = ctx.sorted_indices
         v_out_img = v_out_img[sorted_indices] # 有序
 
         if num_intersects < 1:
@@ -262,6 +263,7 @@ class _RasterizeGaussiansSum(Function):
             )
 
         return (
+            None,
             v_xy,  # xys
             None,  # depths
             None,  # radii
@@ -269,10 +271,13 @@ class _RasterizeGaussiansSum(Function):
             None,  # num_tiles_hit
             v_colors,  # colors
             v_opacity,  # opacity
-            None,  # img_height
-            None,  # img_width
-            None,  # block_w
-            None,  # block_h
+            None,  # cube_x
+            None,  # cube_y
+            None,  # cube_z
+            None,  # block_x
+            None,  # block_y
+            None,  # block_z
+            None,  # lidar_mins 
             None,  # background
             None,  # return_alpha
         )

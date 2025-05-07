@@ -126,6 +126,6 @@ std::
         const torch::Tensor &colors,
         const torch::Tensor &opacities,
         const torch::Tensor &background,
-        const torch::Tensor &v_output, // dL_dout_color
+        const torch::Tensor &v_output // dL_dout_color
     );
     

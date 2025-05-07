@@ -37,14 +37,21 @@ __global__ void project_gaussians_forward_kernel(
     float3 scale = scales[idx];
     float4 quat = quats[idx];
 
+    // printf("scale %d %.2f %.2f %.2f\n", idx, scale.x, scale.y, scale.z);
+
     float *cur_cov3d = &(covs3d[6 * idx]);
     scale_rot_to_cov3d(scale, glob_scale, quat, cur_cov3d);
+    // printf("cur_cov3d %.4f\n", cur_cov3d[0]);
 
-    float radius = fmaxf(fmaxf(scale.x, scale.y), scale.z);
+    float radius = ceil(3.f * fmaxf(fmaxf(scale.x, scale.y), scale.z));
+    // printf("radius %d %.2f\n", idx, radius);
+
     float conic[6];
-    bool ok = compute_cov3d_bounds(cur_cov3d, conic);
+    bool ok = compute_cov3d_bounds(cur_cov3d, conic);  // 相当于遇上有zero determinant的高斯点直接抛弃了
     if (!ok)
         return; // zero determinant
+    // printf("conic %d %.2f %.2f %.2f %.2f %.2f %.2f\n", idx, conic[0], conic[1], conic[2], conic[3], conic[4], conic[5]);
+
     PRAGMA_UNROLL
     for (int i = 0; i < 6; ++i) {
         conics[6 * idx + i] = conic[i];
@@ -53,10 +60,12 @@ __global__ void project_gaussians_forward_kernel(
     // compute the mean in world space
     float3 center = {0.5f * img_size.x * means3d[idx].x + 0.5f * img_size.x,
                     0.5f * img_size.y * means3d[idx].y + 0.5f * img_size.y,
-                    0.5f * img_size.z * means3d[idx].z + 0.5f * img_size.z}; // 这里转换实际的坐标
+                    0.5f * img_size.z * means3d[idx].z + 0.5f * img_size.z}; // [-1, 1) --> [0, img_size)
 
     uint3 tile_min, tile_max;
     get_tile_bbox_3d(center, radius, tile_bounds, tile_min, tile_max);
+    
+    // printf("tile_x %d %d tile_x %d %d tile_x %d %d\n", tile_min.x, tile_max.x, tile_min.y, tile_max.y, tile_min.z, tile_max.z);
     
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y) * (tile_max.z - tile_min.z);
     if (tile_area <= 0) {
@@ -161,6 +170,49 @@ __global__ void get_tile_bin_edges_pts(
 }
 
 
+__device__ void render_one_pixel_of_one_batch_gaussian(
+    const float3 point,  // 需要渲染的位置
+    const int32_t* id_batch, 
+    const float* conic_batch, 
+    const float4* xyz_opacity_batch, 
+    const float* __restrict__ colors,
+    const int num_gaussians,
+    // out
+    float* __restrict__ pix_out
+) {
+    for (int t = 0; (t < num_gaussians); ++t) {
+        // const float3 conic = conic_batch[t];
+        const float *conic = &(conic_batch[6 * t]);
+        const float4 xyz_opac = xyz_opacity_batch[t];
+        const float opac = xyz_opac.w;
+
+        const float3 delta = {xyz_opac.x - point.x, xyz_opac.y - point.y, xyz_opac.z - point.z};
+
+        // printf("delta %.2f %.2f %.2f\n", delta.x, delta.y, delta.z);
+
+        // calculate sigma in 3D
+        const float sigma = 0.5f * (conic[0] * delta.x * delta.x +
+                                     conic[3] * delta.y * delta.y +
+                                     conic[5] * delta.z * delta.z) +
+                             conic[1] * delta.x * delta.y +
+                             conic[2] * delta.x * delta.z +
+                             conic[4] * delta.y * delta.z;
+        
+        if (sigma < 0.f) {
+            continue;
+        }
+        
+        const float vis = opac * __expf(-sigma);
+        int32_t g = id_batch[t];
+
+        const float *c_ptr = colors + g * CHANNELS; // 颜色是直接从主存储里取的
+        PRAGMA_UNROLL
+        for (int c = 0; c < CHANNELS; ++c) {
+            pix_out[c] += c_ptr[c] * vis;  // 不同的线程是写不同位置，无需同步
+        }
+    }
+}
+
 // 4090： 128SM, 128KB shared memory, 1536 threads， 16 blocks
 // 2080：46 SM， 64 KB， 1024 线程
 // 共享内层 256 * 4 + 256*3*4 + 256*6*4 = 10240 字节 （10k） 每个SM的共享内存总量固定, 每个线程使用的共享内存越少，每个SM可驻留的线程块越多
@@ -200,13 +252,18 @@ __global__ void nd_rasterize_forward_sum(
     
     int num_batches = (range.y - range.x + N_THREADS - 1) / N_THREADS;  // 当前 tile高斯点的数量 / tile线程数； 一个线程需要从全局内存中取的高斯点数
     int num_points_rendering = (pts_range.y - pts_range.x + N_THREADS - 1) / N_THREADS; // 一个线程需要渲染的点数
+
+    if (num_points_rendering > MAX_POINTS_PER_THREAD)  {
+      // add warning    
+      printf("Warning: Number of points to render (%d) exceeds the maximum allowed per thread (%d).\n", num_points_rendering, MAX_POINTS_PER_THREAD);
+    }
   
     __shared__ int32_t id_batch[N_THREADS];  // 高斯点 id
     __shared__ float4 xyz_opacity_batch[N_THREADS];
     __shared__ float conic_batch[N_THREADS*6];
 
     int tr = block.thread_rank();
-    float pix_out[num_points_rendering][CHANNELS] = {0.f};  // 这个数据有多的
+    float pix_out[MAX_POINTS_PER_THREAD][CHANNELS] = {0.f};  // 这个数据有多的 // kernel 中 数组大小需要compile-time constant. 
     
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
@@ -271,47 +328,6 @@ __global__ void nd_rasterize_forward_sum(
     }
     
     
-}
-
-__device__ void render_one_pixel_of_one_batch_gaussian(
-    const float3 point,  // 需要渲染的位置
-    const int32_t* id_batch, 
-    const float* conic_batch, 
-    const float4* xyz_opacity_batch, 
-    const float* __restrict__ colors,
-    const int num_gaussians,
-    // out
-    float* __restrict__ pix_out,
-) {
-    for (int t = 0; (t < num_gaussians); ++t) {
-        // const float3 conic = conic_batch[t];
-        const float *conic = &(conic_batch[6 * t]);
-        const float4 xyz_opac = xyz_opacity_batch[t];
-        const float opac = xy_opac.w;
-
-        const float3 delta = {xyz_opac.x - point.x, xyz_opac.y - point.y, xyz_opac.z - point.z};
-
-        // calculate sigma in 3D
-        const float sigma = 0.5f * (conic[0] * delta.x * delta.x +
-                                     conic[3] * delta.y * delta.y +
-                                     conic[5] * delta.z * delta.z) +
-                             conic[1] * delta.x * delta.y +
-                             conic[2] * delta.x * delta.z +
-                             conic[4] * delta.y * delta.z;
-        
-        if (sigma < 0.f) {
-            continue;
-        }
-        
-        const float vis = opac * __expf(-sigma);
-        int32_t g = id_batch[t];
-
-        const float *c_ptr = colors + g * CHANNELS; // 颜色是直接从主存储里取的
-        PRAGMA_UNROLL
-        for (int c = 0; c < CHANNELS; ++c) {
-            pix_out[c] += c_ptr[c] * vis;  // 不同的线程是写不同位置，无需同步
-        }
-    }
 }
 
 

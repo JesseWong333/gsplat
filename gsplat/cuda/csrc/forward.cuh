@@ -47,7 +47,7 @@ __device__ void scale_rot_to_cov3d(
 
 __global__ void map_gaussian_to_intersects(
     const int num_points,
-    const float2* __restrict__ xys,
+    const float3* __restrict__ xys,
     const float* __restrict__ depths,
     const int* __restrict__ radii,
     const int32_t* __restrict__ cum_tiles_hit,

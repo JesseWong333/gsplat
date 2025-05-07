@@ -1,10 +1,7 @@
 #include "backward.cuh"
 #include "bindings.h"
 #include "forward.cuh"
-#include "forward2d.cuh"
-#include "backward2d.cuh"
 #include "helpers.cuh"
-#include "sh.cuh"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cstdio>
@@ -136,7 +133,7 @@ project_gaussians_backward_tensor(
         cov3d.contiguous().data_ptr<float>(),
         radii.contiguous().data_ptr<int32_t>(),
         (float *)conics.contiguous().data_ptr<float>(),
-        (float2 *)v_xy.contiguous().data_ptr<float>(),
+        (float3 *)v_xyz.contiguous().data_ptr<float>(),
         v_depth.contiguous().data_ptr<float>(),
         (float *)v_conic.contiguous().data_ptr<float>(),
         // Outputs.
@@ -177,7 +174,7 @@ std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
         (num_points + N_THREADS - 1) / N_THREADS,
         N_THREADS>>>(
         num_points,
-        (float2 *)xys.contiguous().data_ptr<float>(),
+        (float3 *)xys.contiguous().data_ptr<float>(),
         depths.contiguous().data_ptr<float>(),
         radii.contiguous().data_ptr<int32_t>(),
         cum_tiles_hit.contiguous().data_ptr<int32_t>(),
@@ -259,10 +256,10 @@ std::tuple<
     tile_bounds_dim3.y = std::get<1>(tile_bounds);
     tile_bounds_dim3.z = std::get<2>(tile_bounds);
 
-    dim3 block_dim3;
-    block_dim3.x = std::get<0>(block);
-    block_dim3.y = std::get<1>(block);
-    block_dim3.z = std::get<2>(block);
+    // dim3 block_dim3;
+    // block_dim3.x = std::get<0>(block);
+    // block_dim3.y = std::get<1>(block);
+    // block_dim3.z = std::get<2>(block);
 
     dim3 img_size_dim3;
     img_size_dim3.x = std::get<0>(img_size);
@@ -325,7 +322,7 @@ std::
         const torch::Tensor &colors,
         const torch::Tensor &opacities,
         const torch::Tensor &background,
-        const torch::Tensor &v_output, // dL_dout_color
+        const torch::Tensor &v_output // dL_dout_color
     ) {
 
     CHECK_INPUT(pts);
@@ -343,10 +340,10 @@ std::
     tile_bounds_dim3.y = std::get<1>(tile_bounds);
     tile_bounds_dim3.z = std::get<2>(tile_bounds);
 
-    dim3 block_dim3;
-    block_dim3.x = std::get<0>(block);
-    block_dim3.y = std::get<1>(block);
-    block_dim3.z = std::get<2>(block);
+    // dim3 block_dim3;
+    // block_dim3.x = std::get<0>(block);
+    // block_dim3.y = std::get<1>(block);
+    // block_dim3.z = std::get<2>(block);
 
     dim3 img_size_dim3;
     img_size_dim3.x = std::get<0>(img_size);
@@ -363,9 +360,9 @@ std::
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-    nd_rasterize_backward_sum_kernel<<<tile_bounds_dim3, block, 0, stream>>>(
-        tile_bounds,
-        img_size,
+    nd_rasterize_backward_sum_kernel<<<tile_bounds_dim3, N_THREADS, 0, stream>>>(
+        tile_bounds_dim3,
+        img_size_dim3,
         (float3 *) pts.contiguous().data_ptr<float>(),
         gaussians_ids_sorted.contiguous().data_ptr<int>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
@@ -383,5 +380,5 @@ std::
         v_opacity.contiguous().data_ptr<float>()
     );
 
-    return std::make_tuple(v_xy, v_conic, v_colors, v_opacity);
+    return std::make_tuple(v_xyz, v_conic, v_colors, v_opacity);
 }
