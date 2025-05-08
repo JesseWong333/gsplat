@@ -253,8 +253,7 @@ __global__ void nd_rasterize_forward_sum(
     int num_batches = (range.y - range.x + N_THREADS - 1) / N_THREADS;  // 当前 tile高斯点的数量 / tile线程数； 一个线程需要从全局内存中取的高斯点数
     int num_points_rendering = (pts_range.y - pts_range.x + N_THREADS - 1) / N_THREADS; // 一个线程需要渲染的点数
 
-    if (num_points_rendering > MAX_POINTS_PER_THREAD)  {
-      // add warning    
+    if (num_points_rendering > MAX_POINTS_PER_THREAD)  { 
       printf("Warning: Number of points to render (%d) exceeds the maximum allowed per thread (%d).\n", num_points_rendering, MAX_POINTS_PER_THREAD);
     }
   

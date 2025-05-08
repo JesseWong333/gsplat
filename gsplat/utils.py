@@ -171,7 +171,6 @@ def bin_and_sort_gaussians(
 def bin_pts(
     pts: Float[Tensor, "batch 3"],
     tile_bounds: Tuple[int, int, int],
-    lidar_mins: Tuple[float, float, float],
     block: Tuple[int, int, int]
     ) -> Tuple[
         Float[Tensor, "batch 3"],

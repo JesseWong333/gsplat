@@ -163,7 +163,7 @@ class _RasterizeGaussiansSum(Function):
             )
             
             pts = pts - torch.tensor(lidar_mins).to(pts.device)
-            pts_sorted, sorted_indices, inv_sorted_indices, tile_bins_pts = bin_pts(pts, tile_bounds, lidar_mins, block)
+            pts_sorted, sorted_indices, inv_sorted_indices, tile_bins_pts = bin_pts(pts, tile_bounds, block)
       
             rendering_out, _, _ = _C.nd_rasterize_sum_forward(
                 pts_sorted,
