@@ -34,13 +34,13 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
     const int32_t* id_batch, 
     const float* conic_batch, 
     const float4* xyz_opacity_batch, 
-    const float* __restrict__ colors,
+    // const float* __restrict__ colors,
     const int num_gaussians,
     const int render_pixel_inside, // 当前的这个点渲染是否有效
     // out
     float3* __restrict__ v_xyz,
     float* __restrict__ v_conic,
-    float* __restrict__ v_rgb,
+    // float* __restrict__ v_rgb,
     float* __restrict__ v_opacity
 ){
 
@@ -48,7 +48,7 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
     // 使用线程束优化， 先在线程之间 reduce， 避免了每个线程都对主内存进行写
 
     auto block = cg::this_thread_block();
-    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block); // "block" is undefined
+    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
 
     for (int t = 0; t < num_gaussians; ++t) {
         int valid = render_pixel_inside;
@@ -65,50 +65,30 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
                                     conic[5] * delta.z * delta.z) +
                             conic[1] * delta.x * delta.y +
                             conic[2] * delta.x * delta.z +
-                            conic[4] * delta.y * delta.z;
-        
-        // printf("sigma %.4f \n", sigma); // sigma有很大的值
+                            conic[4] * delta.y * delta.z;  
 
         float vis = __expf(-sigma);
 
-        // printf("vis %.6f \n", vis);
-
-        float alpha = opac * vis; // alpha 未使用，这里有一个 bug
+        // float alpha = opac * vis; // alpha 即是输出
 
         if (sigma < 0.f) {
             valid = 0;
         }
         
-        // todo: 即使这里加了一个判断，线程间一定会出现不同步，这里的 warp 判断作用感觉不大
         // bingo: 作用是 warp.thread_rank() == 0这个写入线程一定会走到最后
         // if all threads are inactive in this warp, skip this loop； 
         if(!warp.any(valid)){
             continue;
         }
 
-        float v_rgb_local[CHANNELS] = {0.f};
+        // float v_rgb_local[CHANNELS] = {0.f};
         float v_conic_local[6] = {0.f};
         float3 v_xyz_local = {0.f, 0.f, 0.f};
         float v_opacity_local = 0.f;
         if(valid){
-            // 对一个高斯点的rgb颜色的导数
-            const float fac = alpha;
-            PRAGMA_UNROLL
-            for (int c = 0; c < CHANNELS; ++c) {
-                v_rgb_local[c] = fac * v_out[c];
-            }
-            
-            // 对alpha，alpha = opac * vis // alpha中间变量
-            float v_alpha = 0.f;
-            int32_t g = id_batch[t];
-            const float *c_ptr = colors + g * CHANNELS; 
-            PRAGMA_UNROLL
-            for (int c = 0; c < CHANNELS; ++c){
-                v_alpha += c_ptr[c] * v_out[c];
-            }
-            
+            // 现在v_alpha即是v_out
             // 对 sigma 协方差矩阵的逆的导数
-            const float v_sigma = -opac * vis * v_alpha;
+            const float v_sigma = -opac * vis * (*v_out);
 
             // 参照前面的calculate sigma in 3D求逆; 是否每一项都要 0.5f? 对称矩阵
             v_conic_local[0] = 0.5f * v_sigma * delta.x * delta.x;
@@ -127,22 +107,17 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
 
             // printf("v_xyz_local %.2f %.2f %.2f\n", v_xyz_local.x, v_xyz_local.y, v_xyz_local.z);
             
-            v_opacity_local = vis * v_alpha;
+            v_opacity_local = vis * (*v_out);
         }
         // 线程束间 reduce
-        warpSum<CHANNELS, float>(v_rgb_local, warp);
+        // warpSum<CHANNELS, float>(v_rgb_local, warp);
+
         warpSum<6, float>(v_conic_local, warp);
         warpSum3(v_xyz_local, warp);
         warpSum(v_opacity_local, warp);
         // 使用一个线程写回主内存
         if (warp.thread_rank() == 0) {
             int32_t g = id_batch[t];
-
-            float *v_rgb_ptr = (float *)(v_rgb) + CHANNELS * g;
-            PRAGMA_UNROLL
-            for (int c = 0; c < CHANNELS; ++c) {
-                atomicAdd(v_rgb_ptr + c, v_rgb_local[c]);
-            }
 
             float *v_conic_ptr = (float *)(v_conic) + 6 * g;
             PRAGMA_UNROLL
@@ -169,13 +144,13 @@ __global__ void nd_rasterize_backward_sum_kernel(
     const int2* __restrict__ tile_bins_pts,
     const float3* __restrict__ xys,
     const float* __restrict__ conics,
-    const float* __restrict__ colors,
+    // const float* __restrict__ colors,
     const float* __restrict__ opacities,
     const float* __restrict__ background,
     const float* __restrict__ v_output,
     float3* __restrict__ v_xyz,
     float* __restrict__ v_conic,
-    float* __restrict__ v_rgb,
+    // float* __restrict__ v_rgb,
     float* __restrict__ v_opacity
 ) {
     
@@ -194,7 +169,7 @@ __global__ void nd_rasterize_backward_sum_kernel(
     __shared__ int32_t id_batch[N_THREADS];
     __shared__ float4 xyz_opacity_batch[N_THREADS];
     __shared__ float conic_batch[N_THREADS*6];
-    // 将全部的数据放入高斯点信息放入共享内存中，容量不够；颜色直接从全局内存中读；to-do:一个替代做法是只渲染有限个，再最后加一个线性层
+    // 将全部的数据放入高斯点信息放入共享内存中，容量不够；颜色直接从全局内存中读；不要颜色
     // __shared__ float rgbs_batch[BLOCK_SIZE * CHANNELS];
 
     // cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
@@ -216,8 +191,6 @@ __global__ void nd_rasterize_backward_sum_kernel(
             for (int i = 0; i < 6; ++i) {
                 conic_batch[tr*6 + i] = conics[g_id*6 + i];
             }
-            // for(int c = 0; c < CHANNELS; ++c)
-            //     rgbs_batch[tr*CHANNELS + c] = rgbs[g_id*CHANNELS + c];
         }
 
         block.sync();
@@ -236,7 +209,7 @@ __global__ void nd_rasterize_backward_sum_kernel(
             const float* v_out;
             if (render_pixel_inside) {
                 point_pts = pts[pts_idx];
-                v_out = &(v_output[pts_idx*CHANNELS]);
+                v_out = &(v_output[pts_idx]);
             }
         
             backward_one_pixel_of_one_batch_gaussian(
@@ -245,12 +218,12 @@ __global__ void nd_rasterize_backward_sum_kernel(
                 id_batch,
                 conic_batch,
                 xyz_opacity_batch,
-                colors,
+                // colors,
                 num_gaussians_curr_batch,
                 render_pixel_inside,
                 v_xyz,
                 v_conic,
-                v_rgb,
+                // v_rgb,
                 v_opacity
             );
 

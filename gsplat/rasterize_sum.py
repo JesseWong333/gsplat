@@ -18,7 +18,7 @@ def rasterize_gaussians_sum(
     radii: Float[Tensor, "*batch 1"],
     conics: Float[Tensor, "*batch 6"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
-    semantics: Float[Tensor, "*batch channels"],
+    # semantics: Float[Tensor, "*batch channels"],
     opacity: Float[Tensor, "*batch 1"],
     cube_x: int,
     cube_y: int,
@@ -71,13 +71,13 @@ def rasterize_gaussians_sum(
     
      
     if background is None:
-        background = torch.ones( 10 ).to(semantics.device)
+        background = torch.ones( 10 ).to(xys.device)
 
     if xys.ndimension() != 2 or xys.size(1) != 3:
         raise ValueError("xys must have dimensions (N, 3)")
 
-    if semantics.ndimension() != 2:
-        raise ValueError("semantics must have dimensions (N, D)")
+    # if semantics.ndimension() != 2:
+    #     raise ValueError("semantics must have dimensions (N, D)")
 
     return _RasterizeGaussiansSum.apply(
         pts.contiguous(),
@@ -86,7 +86,7 @@ def rasterize_gaussians_sum(
         radii.contiguous(),
         conics.contiguous(),
         num_tiles_hit.contiguous(),
-        semantics.contiguous(),
+        # semantics.contiguous(),
         opacity.contiguous(),
         cube_x,
         cube_y,
@@ -112,7 +112,7 @@ class _RasterizeGaussiansSum(Function):
         radii: Float[Tensor, "*batch 1"],
         conics: Float[Tensor, "*batch 6"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
-        colors: Float[Tensor, "*batch channels"],
+        # colors: Float[Tensor, "*batch channels"],
         opacity: Float[Tensor, "*batch 1"],
         cube_x: int,
         cube_y: int,
@@ -139,7 +139,7 @@ class _RasterizeGaussiansSum(Function):
     
         if num_intersects < 1:
             rendering_out = (
-                torch.zeros(cube_x, cube_y, cube_z, colors.shape[-1], device=xys.device) # 
+                torch.zeros(pts.shape[0], device=xys.device) # 
             )
             gaussian_ids_sorted = torch.zeros(0, 1, device=xys.device)
             tile_bins = torch.zeros(0, 2, device=xys.device)
@@ -175,7 +175,7 @@ class _RasterizeGaussiansSum(Function):
                 tile_bins_pts,
                 xys,
                 conics,
-                colors,
+                # colors,
                 opacity,
                 background,
             )
@@ -200,7 +200,7 @@ class _RasterizeGaussiansSum(Function):
             tile_bins_pts,
             xys,
             conics,
-            colors,
+            # colors,
             opacity,
             background,
             sorted_indices
@@ -230,7 +230,7 @@ class _RasterizeGaussiansSum(Function):
             tile_bins_pts,
             xys,
             conics,
-            colors,
+            # colors,
             opacity,
             background,
             sorted_indices
@@ -242,11 +242,11 @@ class _RasterizeGaussiansSum(Function):
         if num_intersects < 1:
             v_xy = torch.zeros_like(xys)
             v_conic = torch.zeros_like(conics)
-            v_colors = torch.zeros_like(colors)
+            # v_colors = torch.zeros_like(colors)
             v_opacity = torch.zeros_like(opacity)
 
         else:
-            v_xy, v_conic, v_colors, v_opacity = _C.nd_rasterize_sum_backward(
+            v_xy, v_conic, v_opacity = _C.nd_rasterize_sum_backward(
                 pts_sorted,
                 tile_bounds,
                 (BLOCK_X, BLOCK_Y, BLOCK_Z),
@@ -256,7 +256,7 @@ class _RasterizeGaussiansSum(Function):
                 tile_bins_pts,
                 xys,
                 conics,
-                colors,
+                # colors,
                 opacity,
                 background,
                 v_out_img,
@@ -269,7 +269,7 @@ class _RasterizeGaussiansSum(Function):
             None,  # radii
             v_conic,  # conics
             None,  # num_tiles_hit
-            v_colors,  # colors
+            # v_colors,  # colors
             v_opacity,  # opacity
             None,  # cube_x
             None,  # cube_y

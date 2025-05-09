@@ -175,13 +175,11 @@ __device__ void render_one_pixel_of_one_batch_gaussian(
     const int32_t* id_batch, 
     const float* conic_batch, 
     const float4* xyz_opacity_batch, 
-    const float* __restrict__ colors,
     const int num_gaussians,
     // out
     float* __restrict__ pix_out
 ) {
     for (int t = 0; (t < num_gaussians); ++t) {
-        // const float3 conic = conic_batch[t];
         const float *conic = &(conic_batch[6 * t]);
         const float4 xyz_opac = xyz_opacity_batch[t];
         const float opac = xyz_opac.w;
@@ -202,14 +200,7 @@ __device__ void render_one_pixel_of_one_batch_gaussian(
             continue;
         }
         
-        const float vis = opac * __expf(-sigma);
-        int32_t g = id_batch[t];
-
-        const float *c_ptr = colors + g * CHANNELS; // 颜色是直接从主存储里取的
-        PRAGMA_UNROLL
-        for (int c = 0; c < CHANNELS; ++c) {
-            pix_out[c] += c_ptr[c] * vis;  // 不同的线程是写不同位置，无需同步
-        }
+        *pix_out = opac * __expf(-sigma);      
     }
 }
 
@@ -235,7 +226,7 @@ __global__ void nd_rasterize_forward_sum(
     const int2* __restrict__ tile_bins_pts,
     const float3* __restrict__ xys,
     const float* __restrict__ conics,
-    const float* __restrict__ colors,
+    // const float* __restrict__ colors,
     const float* __restrict__ opacities,
     float* __restrict__ final_Ts,   // todo: not used
     int* __restrict__ final_index,  // todo: not used
@@ -262,7 +253,7 @@ __global__ void nd_rasterize_forward_sum(
     __shared__ float conic_batch[N_THREADS*6];
 
     int tr = block.thread_rank();
-    float pix_out[MAX_POINTS_PER_THREAD][CHANNELS] = {0.f};  // 这个数据有多的 // kernel 中 数组大小需要compile-time constant. 
+    float pix_out[MAX_POINTS_PER_THREAD] = {0.f};  // 这个数据有多的 // kernel 中 数组大小需要compile-time constant. 
     
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
@@ -306,9 +297,9 @@ __global__ void nd_rasterize_forward_sum(
                 id_batch,
                 conic_batch,
                 xyz_opacity_batch,
-                colors,
+                // colors,
                 num_gaussians_curr_batch,
-                pix_out[b_p]
+                &pix_out[b_p]
             );
         }  
     }
@@ -320,10 +311,7 @@ __global__ void nd_rasterize_forward_sum(
         if (pts_idx >= pts_range.y) {
             continue;
         }
-        PRAGMA_UNROLL
-        for (int c = 0; c < CHANNELS; ++c) {
-            out_img[pts_idx * CHANNELS + c] = pix_out[b_p][c]; // + T * background[c] no bg
-        }
+        out_img[pts_idx] = pix_out[b_p];
     }
     
     

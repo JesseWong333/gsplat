@@ -101,7 +101,7 @@ std::tuple<
     const torch::Tensor &tile_bins_pts,
     const torch::Tensor &xys,
     const torch::Tensor &conics,
-    const torch::Tensor &colors,
+    // const torch::Tensor &colors,
     const torch::Tensor &opacities,
     const torch::Tensor &background
 );
@@ -110,7 +110,7 @@ std::
     tuple<
         torch::Tensor, // dL_dxy
         torch::Tensor, // dL_dconic
-        torch::Tensor, // dL_dcolors
+        // torch::Tensor, // dL_dcolors
         torch::Tensor  // dL_dopacity
         >
     nd_rasterize_backward_sum_tensor(
@@ -123,7 +123,7 @@ std::
         const torch::Tensor &tile_bins_pts,
         const torch::Tensor &xys,
         const torch::Tensor &conics,
-        const torch::Tensor &colors,
+        // const torch::Tensor &colors,
         const torch::Tensor &opacities,
         const torch::Tensor &background,
         const torch::Tensor &v_output // dL_dout_color

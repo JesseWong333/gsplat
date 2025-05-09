@@ -34,13 +34,13 @@ __global__ void nd_rasterize_backward_sum_kernel(
     const int2* __restrict__ tile_bins_pts,
     const float3* __restrict__ xys,
     const float* __restrict__ conics,
-    const float* __restrict__ colors,
+    // const float* __restrict__ colors,
     const float* __restrict__ opacities,
     const float* __restrict__ background,
     const float* __restrict__ v_output,
     float3* __restrict__ v_xyz,
     float* __restrict__ v_conic,
-    float* __restrict__ v_rgb,
+    // float* __restrict__ v_rgb,
     float* __restrict__ v_opacity
     // float* __restrict__ workspace
 );

@@ -31,7 +31,7 @@ __global__ void nd_rasterize_forward_sum(
     const int2* __restrict__ tile_bins_pts,
     const float3* __restrict__ xys,
     const float* __restrict__ conics,
-    const float* __restrict__ colors,
+    // const float* __restrict__ colors,
     const float* __restrict__ opacities,
     float* __restrict__ final_Ts,
     int* __restrict__ final_index,

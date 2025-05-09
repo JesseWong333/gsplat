@@ -237,7 +237,7 @@ std::tuple<
     const torch::Tensor &tile_bins_pts,
     const torch::Tensor &xys,
     const torch::Tensor &conics,
-    const torch::Tensor &colors,
+    // const torch::Tensor &colors,
     const torch::Tensor &opacities,
     const torch::Tensor &background
 ) {
@@ -247,7 +247,7 @@ std::tuple<
     CHECK_INPUT(tile_bins_pts)
     CHECK_INPUT(xys);
     CHECK_INPUT(conics);
-    CHECK_INPUT(colors);
+    // CHECK_INPUT(colors);
     CHECK_INPUT(opacities);
     CHECK_INPUT(background);
 
@@ -266,13 +266,14 @@ std::tuple<
     img_size_dim3.y = std::get<1>(img_size);
     img_size_dim3.z = std::get<2>(img_size);
 
-    const int channels = colors.size(1);
+    // const int channels = colors.size(1);
 
     // 现在要渲染的大小是由 Pts 指定
     const int rendering_size = pts.size(0);
 
+    // 默认 logistic 值为
     torch::Tensor out_img = torch::zeros(
-        {rendering_size, channels}, xys.options().dtype(torch::kFloat32)
+        {rendering_size}, xys.options().dtype(torch::kFloat32)
     );
     torch::Tensor final_Ts = torch::zeros(
         {rendering_size}, xys.options().dtype(torch::kFloat32)
@@ -291,7 +292,7 @@ std::tuple<
         (int2 *)tile_bins_pts.contiguous().data_ptr<int>(),
         (float3 *)xys.contiguous().data_ptr<float>(),
         conics.contiguous().data_ptr<float>(),
-        colors.contiguous().data_ptr<float>(),
+        // colors.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
@@ -306,7 +307,7 @@ std::
     tuple<
         torch::Tensor, // dL_dxy
         torch::Tensor, // dL_dconic
-        torch::Tensor, // dL_dcolors
+        // torch::Tensor, // dL_dcolors
         torch::Tensor  // dL_dopacity
         >
     nd_rasterize_backward_sum_tensor(
@@ -319,7 +320,7 @@ std::
         const torch::Tensor &tile_bins_pts,
         const torch::Tensor &xys,
         const torch::Tensor &conics,
-        const torch::Tensor &colors,
+        // const torch::Tensor &colors,
         const torch::Tensor &opacities,
         const torch::Tensor &background,
         const torch::Tensor &v_output // dL_dout_color
@@ -331,7 +332,7 @@ std::
     CHECK_INPUT(tile_bins_pts)
     CHECK_INPUT(xys);
     CHECK_INPUT(conics);
-    CHECK_INPUT(colors);
+    // CHECK_INPUT(colors);
     CHECK_INPUT(opacities);
     CHECK_INPUT(background);
 
@@ -351,12 +352,12 @@ std::
     img_size_dim3.z = std::get<2>(img_size);
 
     const int num_points = xys.size(0);  // 高斯点数
-    const int channels = colors.size(1);
+    // const int channels = colors.size(1);
 
     torch::Tensor v_xyz = torch::zeros({num_points, 3}, xys.options());
     torch::Tensor v_conic = torch::zeros({num_points, 6}, xys.options());
-    torch::Tensor v_colors =
-        torch::zeros({num_points, channels}, xys.options());
+    // torch::Tensor v_colors =
+    //     torch::zeros({num_points, channels}, xys.options());
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
@@ -369,16 +370,16 @@ std::
         (int2 *)tile_bins_pts.contiguous().data_ptr<int>(),
         (float3 *)xys.contiguous().data_ptr<float>(),
         conics.contiguous().data_ptr<float>(),
-        colors.contiguous().data_ptr<float>(),
+        // colors.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
         background.contiguous().data_ptr<float>(),
         v_output.contiguous().data_ptr<float>(),
         // out
         (float3 *)v_xyz.contiguous().data_ptr<float>(),
         v_conic.contiguous().data_ptr<float>(),
-        v_colors.contiguous().data_ptr<float>(),
+        // v_colors.contiguous().data_ptr<float>(),
         v_opacity.contiguous().data_ptr<float>()
     );
 
-    return std::make_tuple(v_xyz, v_conic, v_colors, v_opacity);
+    return std::make_tuple(v_xyz, v_conic, v_opacity);
 }
