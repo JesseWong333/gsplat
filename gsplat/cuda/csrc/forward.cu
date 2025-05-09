@@ -200,7 +200,7 @@ __device__ void render_one_pixel_of_one_batch_gaussian(
             continue;
         }
         
-        *pix_out = opac * __expf(-sigma);      
+        *pix_out += opac * __expf(-sigma); // 这里是+=不是 =
     }
 }
 
