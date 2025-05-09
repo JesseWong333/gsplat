@@ -244,16 +244,21 @@ __global__ void nd_rasterize_forward_sum(
     int num_batches = (range.y - range.x + N_THREADS - 1) / N_THREADS;  // 当前 tile高斯点的数量 / tile线程数； 一个线程需要从全局内存中取的高斯点数
     int num_points_rendering = (pts_range.y - pts_range.x + N_THREADS - 1) / N_THREADS; // 一个线程需要渲染的点数
 
+
     if (num_points_rendering > MAX_POINTS_PER_THREAD)  { 
-      printf("Warning: Number of points to render (%d) exceeds the maximum allowed per thread (%d).\n", num_points_rendering, MAX_POINTS_PER_THREAD);
+      printf("Warning: Number of points to render (%d) exceeds the maximum allowed per thread (%d). the caculation is wrong\n", num_points_rendering, MAX_POINTS_PER_THREAD);
     }
+    if (num_points_rendering > N_THREADS){
+        printf("Warning: Number of points to render (%d) exceeds N_THREADS (%d). condidering reduce tile size\n", num_points_rendering, N_THREADS);
+    }
+    
   
     __shared__ int32_t id_batch[N_THREADS];  // 高斯点 id
     __shared__ float4 xyz_opacity_batch[N_THREADS];
     __shared__ float conic_batch[N_THREADS*6];
 
     int tr = block.thread_rank();
-    float pix_out[MAX_POINTS_PER_THREAD] = {0.f};  // 这个数据有多的 // kernel 中 数组大小需要compile-time constant. 
+    float pix_out[MAX_POINTS_PER_THREAD] = {0.f};
     
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
