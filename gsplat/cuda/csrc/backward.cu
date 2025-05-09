@@ -30,7 +30,7 @@ inline __device__ void warpSum(T *val, WarpT &warp) {
 
 __device__ void backward_one_pixel_of_one_batch_gaussian(
     float3 point, // 输出像素的位置
-    const float* v_out, // 输出的像素的梯度, channel维
+    const float v_out, // 输出的像素的梯度, channel维
     const int32_t* id_batch, 
     const float* conic_batch, 
     const float4* xyz_opacity_batch, 
@@ -88,7 +88,7 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
         if(valid){
             // 现在v_alpha即是v_out
             // 对 sigma 协方差矩阵的逆的导数
-            const float v_sigma = -opac * vis * (*v_out);
+            const float v_sigma = -opac * vis * v_out;
 
             // 参照前面的calculate sigma in 3D求逆; 是否每一项都要 0.5f? 对称矩阵
             v_conic_local[0] = 0.5f * v_sigma * delta.x * delta.x;
@@ -107,7 +107,7 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
 
             // printf("v_xyz_local %.2f %.2f %.2f\n", v_xyz_local.x, v_xyz_local.y, v_xyz_local.z);
             
-            v_opacity_local = vis * (*v_out);
+            v_opacity_local = vis * v_out;
         }
         // 线程束间 reduce
         // warpSum<CHANNELS, float>(v_rgb_local, warp);
@@ -206,10 +206,10 @@ __global__ void nd_rasterize_backward_sum_kernel(
                 render_pixel_inside = 0;
             }
             float3 point_pts = {0.0f,0.0f,0.0f};
-            const float* v_out;
+            float v_out = 0.0f;
             if (render_pixel_inside) {
                 point_pts = pts[pts_idx];
-                v_out = &(v_output[pts_idx]);
+                v_out = v_output[pts_idx];
             }
         
             backward_one_pixel_of_one_batch_gaussian(

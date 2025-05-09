@@ -230,7 +230,7 @@ __global__ void nd_rasterize_forward_sum(
     const float* __restrict__ opacities,
     float* __restrict__ final_Ts,   // todo: not used
     int* __restrict__ final_index,  // todo: not used
-    float* __restrict__ out_img,  // N * C
+    float* __restrict__ out_img,  // N 
     const float* __restrict__ background  //todo: may be used in the future
 ) {
     auto block = cg::this_thread_block();
