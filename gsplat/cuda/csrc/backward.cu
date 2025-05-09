@@ -92,10 +92,9 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
         float v_opacity_local = 0.f;
         if(valid){
             // 对一个高斯点的rgb颜色的导数
-            const float fac = alpha;
             PRAGMA_UNROLL
             for (int c = 0; c < CHANNELS; ++c) {
-                v_rgb_local[c] = fac * v_out[c];
+                v_rgb_local[c] = alpha * v_out[c];
             }
             
             // 对alpha，alpha = opac * vis // alpha中间变量

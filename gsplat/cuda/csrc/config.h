@@ -6,7 +6,7 @@
 
 #define MAX_REGISTER_CHANNELS 256
 #define MAX_POINTS_PER_THREAD 16  // 一个 block最多处理 256 * 16 = 4096 个点
-#define CHANNELS 2
+#define CHANNELS 1
 
 #define CUDA_CALL(x)                                                           \
     do {                                                                       \
