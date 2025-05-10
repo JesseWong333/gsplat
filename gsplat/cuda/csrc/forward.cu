@@ -200,7 +200,7 @@ __device__ void render_one_pixel_of_one_batch_gaussian(
             continue;
         }
         
-        *pix_out += opac * __expf(-sigma); // 这里是+=不是 =
+        *pix_out = (1 - opac * __expf(-sigma)) * (*pix_out);
     }
 }
 
@@ -258,7 +258,7 @@ __global__ void nd_rasterize_forward_sum(
     __shared__ float conic_batch[N_THREADS*6];
 
     int tr = block.thread_rank();
-    float pix_out[MAX_POINTS_PER_THREAD] = {0.f};
+    float pix_out[MAX_POINTS_PER_THREAD] = {1.f};
     
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
@@ -316,7 +316,7 @@ __global__ void nd_rasterize_forward_sum(
         if (pts_idx >= pts_range.y) {
             continue;
         }
-        out_img[pts_idx] = pix_out[b_p];
+        out_img[pts_idx] = 1 - pix_out[b_p];
     }
     
     
