@@ -121,6 +121,7 @@ std::
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
         const torch::Tensor &tile_bins_pts,
+        const torch::Tensor &out,
         const torch::Tensor &xys,
         const torch::Tensor &conics,
         // const torch::Tensor &colors,

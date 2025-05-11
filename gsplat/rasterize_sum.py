@@ -194,6 +194,7 @@ class _RasterizeGaussiansSum(Function):
 
         ctx.num_intersects = num_intersects
         ctx.save_for_backward(
+            rendering_out,
             pts_sorted,
             gaussian_ids_sorted,
             tile_bins,
@@ -224,6 +225,7 @@ class _RasterizeGaussiansSum(Function):
         num_intersects = ctx.num_intersects
 
         (
+            rendering_out,
             pts_sorted,
             gaussian_ids_sorted,
             tile_bins,
@@ -254,6 +256,7 @@ class _RasterizeGaussiansSum(Function):
                 gaussian_ids_sorted,
                 tile_bins,
                 tile_bins_pts,
+                rendering_out,
                 xys,
                 conics,
                 # colors,

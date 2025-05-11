@@ -318,6 +318,7 @@ std::
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
         const torch::Tensor &tile_bins_pts,
+        const torch::Tensor &out, // 渲染的输出
         const torch::Tensor &xys,
         const torch::Tensor &conics,
         // const torch::Tensor &colors,
@@ -330,6 +331,7 @@ std::
     CHECK_INPUT(gaussians_ids_sorted);
     CHECK_INPUT(tile_bins);
     CHECK_INPUT(tile_bins_pts)
+    CHECK_INPUT(out);
     CHECK_INPUT(xys);
     CHECK_INPUT(conics);
     // CHECK_INPUT(colors);
@@ -368,6 +370,7 @@ std::
         gaussians_ids_sorted.contiguous().data_ptr<int>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (int2 *)tile_bins_pts.contiguous().data_ptr<int>(),
+        out.contiguous().data_ptr<float>(),
         (float3 *)xys.contiguous().data_ptr<float>(),
         conics.contiguous().data_ptr<float>(),
         // colors.contiguous().data_ptr<float>(),
