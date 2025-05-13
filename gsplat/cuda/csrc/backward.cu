@@ -91,12 +91,12 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
             const float v_sigma = -opac * vis * v_out;
 
             // 参照前面的calculate sigma in 3D求逆; 是否每一项都要 0.5f? 对称矩阵
-            v_conic_local[0] = 0.5f * v_sigma * delta.x * delta.x;
+            v_conic_local[0] = v_sigma * delta.x * delta.x;
             v_conic_local[1] = 0.5f * v_sigma * delta.x * delta.y;
             v_conic_local[2] = 0.5f * v_sigma * delta.x * delta.z;
-            v_conic_local[3] = 0.5f * v_sigma * delta.y * delta.y;
+            v_conic_local[3] = v_sigma * delta.y * delta.y;
             v_conic_local[4] = 0.5f * v_sigma * delta.y * delta.z;
-            v_conic_local[5] = 0.5f * v_sigma * delta.z * delta.z;
+            v_conic_local[5] = v_sigma * delta.z * delta.z;
 
             // 同样参照前面的calculate sigma in 3D求逆;
             v_xyz_local = {
