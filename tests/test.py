@@ -1,5 +1,5 @@
 # 修复梯度bug后
-# 1） 将默认的logistic改为-6， 训练有一定的效果，可以看到基本轮廓出来了，但不精细
+# 1） 不行，只要让 opacity 是全正的，训练不出来
 
 import torch
 import torch.nn as nn

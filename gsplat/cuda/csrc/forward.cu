@@ -258,7 +258,7 @@ __global__ void nd_rasterize_forward_sum(
     __shared__ float conic_batch[N_THREADS*6];
 
     int tr = block.thread_rank();
-    float pix_out[MAX_POINTS_PER_THREAD] = {-6.f};
+    float pix_out[MAX_POINTS_PER_THREAD] = {0.f};
     
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
