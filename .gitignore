@@ -123,6 +123,6 @@ compile_commands.json
 
 samples/
 
-test.py
+# test.py
 model.py
 GaussianSSC_gaplat.py
