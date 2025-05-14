@@ -126,3 +126,4 @@ samples/
 # test.py
 model.py
 GaussianSSC_gaplat.py
+*.ipynb
