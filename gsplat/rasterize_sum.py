@@ -60,15 +60,6 @@ def rasterize_gaussians_sum(
     #     # make sure colors are float [0,1]
     #     colors = colors.float() / 255
 
-    # 是不是可以这样：计算是否占据的时候，先有一个二分类，再有一个多分类
-    # Gaussian former的哪一篇， 很可能是将 opacity作为occupancy的分类了
-    # -----------------------------------------------
-    # semantics shape: (N, channels)
-    # background shape: (N, 1)
-    # rendering shape: (N, channels + 1)
-    # -----------------------------------------------
-    # background针对的是没有高斯点的区域，显示默认的颜色
-    
      
     if background is None:
         background = torch.ones( 10 ).to(xys.device)
@@ -165,7 +156,7 @@ class _RasterizeGaussiansSum(Function):
             pts = pts - torch.tensor(lidar_mins).to(pts.device)
             pts_sorted, sorted_indices, inv_sorted_indices, tile_bins_pts = bin_pts(pts, tile_bounds, block)
       
-            rendering_out, _, _ = _C.nd_rasterize_sum_forward(
+            rendering_out_sorted, _, _ = _C.nd_rasterize_sum_forward(
                 pts_sorted,
                 tile_bounds,
                 block,
@@ -180,7 +171,7 @@ class _RasterizeGaussiansSum(Function):
                 background,
             )
             
-            rendering_out = rendering_out[inv_sorted_indices]
+            rendering_out = rendering_out_sorted[inv_sorted_indices]
 
         ctx.cube_x = cube_x
         ctx.cube_y = cube_y
@@ -194,7 +185,7 @@ class _RasterizeGaussiansSum(Function):
 
         ctx.num_intersects = num_intersects
         ctx.save_for_backward(
-            rendering_out,
+            rendering_out_sorted,
             pts_sorted,
             gaussian_ids_sorted,
             tile_bins,

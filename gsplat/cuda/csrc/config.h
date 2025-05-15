@@ -1,6 +1,6 @@
-#define BLOCK_X 1
-#define BLOCK_Y 1
-#define BLOCK_Z 1
+#define BLOCK_X 6
+#define BLOCK_Y 6
+#define BLOCK_Z 6
 // #define BLOCK_SIZE (BLOCK_X * BLOCK_Y * BLOCK_Z)
 #define N_THREADS 256
 

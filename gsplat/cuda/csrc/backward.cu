@@ -89,7 +89,7 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
         if(valid){
             // 现在v_alpha即是v_out
             // 对 sigma 协方差矩阵的逆的导数
-            const float v_sigma = - (1 - out) / (1- vis + + 1e-9) * vis * v_out;
+            const float v_sigma = - (1 - out) / (1- vis + 1e-9) * vis * v_out;
             // printf("v_sigma %.4f\n", v_sigma);
 
             // 参照前面的calculate sigma in 3D求逆; 是否每一项都要 0.5f? 对称矩阵
