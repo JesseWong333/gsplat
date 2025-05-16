@@ -199,9 +199,9 @@ __device__ void render_one_pixel_of_one_batch_gaussian(
         if (sigma < 0.f) {
             continue;
         }
-        // printf("sigma %.2f\n", sigma);
+        
         *pix_out = (1 - opac * __expf(-sigma)) * (*pix_out);
-        // printf("pix_out %.5f\n", *pix_out);
+       
     }
 }
 
@@ -319,8 +319,7 @@ __global__ void nd_rasterize_forward_sum(
         }
         out_img[pts_idx] = 1 - pix_out[b_p];
     }
-    
-    
+
 }
 
 

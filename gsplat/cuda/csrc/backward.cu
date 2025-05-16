@@ -70,7 +70,7 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
 
         float vis = __expf(-sigma);
 
-        // float alpha = opac * vis; // alpha 即是输出
+        float alpha = opac * vis;
 
         if (sigma < 0.f) {
             valid = 0;
@@ -87,9 +87,9 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
         float3 v_xyz_local = {0.f, 0.f, 0.f};
         float v_opacity_local = 0.f;
         if(valid){
-            // 现在v_alpha即是v_out
+    
             // 对 sigma 协方差矩阵的逆的导数
-            const float v_sigma = - (1 - out) / (1- vis + 1e-9) * vis * v_out;
+            const float v_sigma = - (1 - out) / (1- alpha + 1e-9) * alpha * v_out;
             // printf("v_sigma %.4f\n", v_sigma);
 
             // 参照前面的calculate sigma in 3D求逆; 是否每一项都要 0.5f? 对称矩阵
@@ -109,7 +109,8 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
 
             // printf("v_xyz_local %.2f %.2f %.2f\n", v_xyz_local.x, v_xyz_local.y, v_xyz_local.z);
             
-            v_opacity_local = vis * v_out;
+            // v_opacity_local = vis / (1 - alpha) * (1-out) * v_out;
+            v_opacity_local = (1 - out) / (1 - alpha + 1e-9) *  vis * v_out;
         }
         // 线程束间 reduce
         // warpSum<CHANNELS, float>(v_rgb_local, warp);

@@ -72,6 +72,7 @@ class GaussianSSC(nn.Module):
     def get_opacity(self):
         # return torch.exp(self._opacity) # 保证 > 0
         return self._opacity
+        # return torch.sigmoid(self._opacity)
     
     @property
     def get_rotation(self):
@@ -117,7 +118,7 @@ if __name__ == '__main__':
     grid_size = 6
     
     num_channel = 2  # 占据或者不占据
-    num_points = 20 # 高斯点
+    num_points = 500 # 高斯点
     
     # 我这样做其实是一个生成式的3D模型，雷达是采样的点
     gaussian_model = GaussianSSC(num_points=num_points, H = cube_x, W = cube_y, L = cube_z, BLOCK_W = grid_size, BLOCK_H = grid_size, BLOCK_L = grid_size, lidar_mins=mins).cuda()
@@ -160,7 +161,7 @@ if __name__ == '__main__':
         out = gaussian_model.forward(sampled_points) # N * 1; 渲染就是全 0是初始化的问题
         # out = out.squeeze(1)
         loss = loss_fn(out, sampled_target)
-        # torch.nn.utils.clip_grad_norm_(gaussian_model.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(gaussian_model.parameters(), max_norm=1.0)
         loss.backward()   
         optimizer.step()
         optimizer.zero_grad()
