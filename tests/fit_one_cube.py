@@ -51,10 +51,10 @@ class GaussianSSC(nn.Module):
 
         self._scaling = nn.Parameter(torch.log(torch.rand(self.init_num_points, 3)))
 
-        self.register_buffer('_opacity', torch.ones((self.init_num_points, 1)))
+        # self.register_buffer('_opacity', torch.ones((self.init_num_points, 1)))
         # self._opacity = nn.Parameter(torch.logit(0.5 * torch.ones(self.init_num_points, 1))) # 限制在0-1之间
         # self._opacity = nn.Parameter(10 * torch.rand(self.init_num_points, 1))  # 结合 exp 保证 > 0
-        # self._opacity = nn.Parameter(torch.rand(self.init_num_points, 1))
+        self._opacity = nn.Parameter(torch.rand(self.init_num_points, 1))
         self._rotation = nn.Parameter(random_quat_tensor(self.init_num_points))
 
         # self._features_dc = nn.Parameter(torch.rand(self.init_num_points, 2)) 
@@ -117,12 +117,12 @@ if __name__ == '__main__':
     grid_size = 6
     
     num_channel = 2  # 占据或者不占据
-    num_points = 20 # 高斯点
+    num_points = 200 # 高斯点
     
     # 我这样做其实是一个生成式的3D模型，雷达是采样的点
     gaussian_model = GaussianSSC(num_points=num_points, H = cube_x, W = cube_y, L = cube_z, BLOCK_W = grid_size, BLOCK_H = grid_size, BLOCK_L = grid_size, lidar_mins=mins).cuda()
     
-    steps = 2000
+    steps = 4000
 
     # loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.8, 1]).cuda())
     # loss_fn = nn.BCEWithLogitsLoss(weight=torch.tensor([1.])).cuda()
@@ -166,7 +166,7 @@ if __name__ == '__main__':
         optimizer.zero_grad()
         
         progress_bar.set_description(f"Step {i}, Loss: {loss.item()}")
-        if i % 50 == 0:
+        if i % 100 == 0:
             vis_data.append(
                 {
                     "out": out.cpu().detach().numpy(),     
@@ -212,7 +212,7 @@ pass
 #     pil_image = Image.fromarray(image)
 #     return pil_image
 
-def rendering_output(out, points, thresh=0.5):
+def rendering_output(out, points, thresh=0.3):
     # 创建可视化掩码：只显示值大于0.01的点
     mask = (out > thresh)
     points_masked = points[mask].astype(np.float32)

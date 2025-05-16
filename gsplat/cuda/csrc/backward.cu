@@ -29,7 +29,8 @@ inline __device__ void warpSum(T *val, WarpT &warp) {
 }
 
 __device__ void backward_one_pixel_of_one_batch_gaussian(
-    const float out,
+    const float prob_out,
+    const float sum_out,
     float3 point, // 输出像素的位置
     const float v_out, // 输出的像素的梯度, channel维
     const int32_t* id_batch, 
@@ -51,6 +52,9 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
     auto block = cg::this_thread_block();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
 
+    float sigmoid_sum = 1.f / (1 + __expf(-sum_out));
+    float term_2 = (1 - prob_out) * sigmoid_sum * (1 - sigmoid_sum);  // (1-A)*S*(1-S)这一项对每个高斯都相同；提前一起做
+
     for (int t = 0; t < num_gaussians; ++t) {
         int valid = render_pixel_inside;
         const float* conic = &(conic_batch[6 * t]);
@@ -58,7 +62,6 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
         const float opac = xyz_opac.w;
 
         const float3 delta = {xyz_opac.x - point.x, xyz_opac.y - point.y, xyz_opac.z - point.z};
-        // printf("delta %.4f %.4f %.4f\n", delta.x, delta.y, delta.z);
 
         // calculate sigma in 3D
         const float sigma = 0.5f * (conic[0] * delta.x * delta.x +
@@ -82,15 +85,14 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
             continue;
         }
 
-        // float v_rgb_local[CHANNELS] = {0.f};
         float v_conic_local[6] = {0.f};
         float3 v_xyz_local = {0.f, 0.f, 0.f};
         float v_opacity_local = 0.f;
         if(valid){
-            // 现在v_alpha即是v_out
             // 对 sigma 协方差矩阵的逆的导数
-            const float v_sigma = - (1 - out) / (1- vis + 1e-9) * vis * v_out;
-            // printf("v_sigma %.4f\n", v_sigma);
+            // const float v_sigma = - (1 - out) / (1- vis + 1e-9) * vis * v_out;
+            float term_1 = - prob_out / (1 - vis + 1e-9) * vis * sigmoid_sum;
+            float v_sigma = (term_1 + term_2) * v_out;
 
             // 参照前面的calculate sigma in 3D求逆; 是否每一项都要 0.5f? 对称矩阵
             v_conic_local[0] = v_sigma * delta.x * delta.x;
@@ -106,10 +108,11 @@ __device__ void backward_one_pixel_of_one_batch_gaussian(
                 v_sigma * (conic[1] * delta.x + conic[3] * delta.y + conic[4] * delta.z),
                 v_sigma * (conic[2] * delta.x + conic[4] * delta.y + conic[5] * delta.z)
             };
+        
+            // v_opacity_local = vis * v_out;
 
-            // printf("v_xyz_local %.2f %.2f %.2f\n", v_xyz_local.x, v_xyz_local.y, v_xyz_local.z);
-            
-            v_opacity_local = vis * v_out;
+            v_opacity_local = term_2 * vis * v_out;
+
         }
         // 线程束间 reduce
         // warpSum<CHANNELS, float>(v_rgb_local, warp);
@@ -144,7 +147,9 @@ __global__ void nd_rasterize_backward_sum_kernel(
     const int32_t* __restrict__ gaussians_ids_sorted,
     const int2* __restrict__ tile_bins,
     const int2* __restrict__ tile_bins_pts,
-    const float* __restrict__ output, // 渲染结果
+    const float* __restrict__ prob_outputs,
+    const float* __restrict__ sum_outputs,
+
     const float3* __restrict__ xys,
     const float* __restrict__ conics,
     // const float* __restrict__ colors,
@@ -208,17 +213,21 @@ __global__ void nd_rasterize_backward_sum_kernel(
             if (pts_idx >= pts_range.y) {
                 render_pixel_inside = 0;
             }
-            float out = 0.0f;
+            float prod_out = 1.0f;
+            float sum_out = 0.0f;
             float3 point_pts = {0.0f,0.0f,0.0f};
             float v_out = 0.0f;
             if (render_pixel_inside) {
-                out = output[pts_idx];
+                prod_out = prob_outputs[pts_idx];
+                sum_out = sum_outputs[pts_idx];
+
                 point_pts = pts[pts_idx];
                 v_out = v_output[pts_idx];
             }
         
             backward_one_pixel_of_one_batch_gaussian(
-                out,
+                prod_out,
+                sum_out,
                 point_pts,
                 v_out,
                 id_batch,

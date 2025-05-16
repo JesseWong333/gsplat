@@ -177,7 +177,8 @@ __device__ void render_one_pixel_of_one_batch_gaussian(
     const float4* xyz_opacity_batch, 
     const int num_gaussians,
     // out
-    float* __restrict__ pix_out
+    float* __restrict__ prod_out,
+    float* __restrict__ sum_out
 ) {
     for (int t = 0; (t < num_gaussians); ++t) {
         const float *conic = &(conic_batch[6 * t]);
@@ -199,18 +200,11 @@ __device__ void render_one_pixel_of_one_batch_gaussian(
         if (sigma < 0.f) {
             continue;
         }
-        // printf("sigma %.2f\n", sigma);
-        *pix_out = (1 - opac * __expf(-sigma)) * (*pix_out);
-        // printf("pix_out %.5f\n", *pix_out);
+
+        *prod_out = (*prod_out) * (1 - __expf(-sigma));
+        *sum_out = (*sum_out) + opac * __expf(-sigma);
     }
 }
-
-// 4090： 128SM, 128KB shared memory, 1536 threads， 16 blocks
-// 2080：46 SM， 64 KB， 1024 线程
-// 共享内层 256 * 4 + 256*3*4 + 256*6*4 = 10240 字节 （10k） 每个SM的共享内存总量固定, 每个线程使用的共享内存越少，每个SM可驻留的线程块越多
-// 则 4090 大概 可以 12个线程块*256 线程 = 3072， 超过了最大数量，满载
-// 则 2080 大概可 6 个线程块*256 线程 = 1024， 刚好满载
-
 
 // 并行思路：
 // 1) 每个线程取一个数据（一个高斯点）到共享内存; 此时数据没有取完，可能高斯点更多； 做了一个 batch,  batch_size = BLOCK_SIZE
@@ -229,9 +223,9 @@ __global__ void nd_rasterize_forward_sum(
     const float* __restrict__ conics,
     // const float* __restrict__ colors,
     const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,   // todo: not used
-    int* __restrict__ final_index,  // todo: not used
-    float* __restrict__ out_img,  // N 
+    float* __restrict__ out_img, 
+    float* __restrict__ prod_outs,
+    float* __restrict__ sum_outs,
     const float* __restrict__ background  //todo: may be used in the future
 ) {
     auto block = cg::this_thread_block();
@@ -253,14 +247,15 @@ __global__ void nd_rasterize_forward_sum(
         printf("Warning: Number of points to render (%d) exceeds N_THREADS (%d). condidering reduce tile size\n", num_points_rendering, N_THREADS);
     }
     
-  
     __shared__ int32_t id_batch[N_THREADS];  // 高斯点 id
     __shared__ float4 xyz_opacity_batch[N_THREADS];
     __shared__ float conic_batch[N_THREADS*6];
 
     int tr = block.thread_rank();
-    float pix_out[MAX_POINTS_PER_THREAD] = {1.f};
-    
+
+    float prod_out[MAX_POINTS_PER_THREAD] = {1.f};
+    float sum_out[MAX_POINTS_PER_THREAD] = {0.f};
+     
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -305,7 +300,8 @@ __global__ void nd_rasterize_forward_sum(
                 xyz_opacity_batch,
                 // colors,
                 num_gaussians_curr_batch,
-                &pix_out[b_p]
+                &prod_out[b_p],
+                &sum_out[b_p]
             );
         }  
     }
@@ -317,7 +313,9 @@ __global__ void nd_rasterize_forward_sum(
         if (pts_idx >= pts_range.y) {
             continue;
         }
-        out_img[pts_idx] = 1 - pix_out[b_p];
+        out_img[pts_idx] = (1 - prod_out[b_p]) / (1 + __expf(-sum_out[b_p]));
+        prod_outs[pts_idx] = prod_out[b_p]; // 保存 prod_out 和 sum_out，用于backward
+        sum_outs[pts_idx] = sum_out[b_p];
     }
     
     

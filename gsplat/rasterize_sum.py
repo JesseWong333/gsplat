@@ -156,7 +156,7 @@ class _RasterizeGaussiansSum(Function):
             pts = pts - torch.tensor(lidar_mins).to(pts.device)
             pts_sorted, sorted_indices, inv_sorted_indices, tile_bins_pts = bin_pts(pts, tile_bounds, block)
       
-            rendering_out_sorted, _, _ = _C.nd_rasterize_sum_forward(
+            rendering_out_sorted, prod_outs_sorted, sum_outs_sorted = _C.nd_rasterize_sum_forward(
                 pts_sorted,
                 tile_bounds,
                 block,
@@ -185,7 +185,8 @@ class _RasterizeGaussiansSum(Function):
 
         ctx.num_intersects = num_intersects
         ctx.save_for_backward(
-            rendering_out_sorted,
+            prod_outs_sorted,
+            sum_outs_sorted,
             pts_sorted,
             gaussian_ids_sorted,
             tile_bins,
@@ -216,7 +217,8 @@ class _RasterizeGaussiansSum(Function):
         num_intersects = ctx.num_intersects
 
         (
-            rendering_out,
+            prod_outs_sorted,
+            sum_outs_sorted,
             pts_sorted,
             gaussian_ids_sorted,
             tile_bins,
@@ -247,7 +249,8 @@ class _RasterizeGaussiansSum(Function):
                 gaussian_ids_sorted,
                 tile_bins,
                 tile_bins_pts,
-                rendering_out,
+                prod_outs_sorted,
+                sum_outs_sorted,
                 xys,
                 conics,
                 # colors,

@@ -32,7 +32,10 @@ __global__ void nd_rasterize_backward_sum_kernel(
     const int32_t* __restrict__ gaussians_ids_sorted,
     const int2* __restrict__ tile_bins,
     const int2* __restrict__ tile_bins_pts,
-    const float* __restrict__ output,
+    
+    const float* __restrict__ prob_outputs,
+    const float* __restrict__ sum_outputs,
+    
     const float3* __restrict__ xys,
     const float* __restrict__ conics,
     // const float* __restrict__ colors,

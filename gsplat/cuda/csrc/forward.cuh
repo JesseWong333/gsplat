@@ -33,9 +33,9 @@ __global__ void nd_rasterize_forward_sum(
     const float* __restrict__ conics,
     // const float* __restrict__ colors,
     const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
     float* __restrict__ out_img,
+    float* __restrict__ prod_outs,
+    float* __restrict__ sum_outs, 
     const float* __restrict__ background
 );
 
