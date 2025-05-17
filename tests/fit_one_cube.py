@@ -102,8 +102,8 @@ if __name__ == '__main__':
     
     gt_image = torch.zeros((cube_x, cube_y, cube_z))
     # make top left and bottom right red, blue
-    gt_image[: cube_x // 2, : cube_y // 2, cube_z // 2 :] = torch.tensor([1.0])
-    gt_image[cube_x // 2 :, cube_y // 2 :, :cube_z // 2] = torch.tensor([1.0])
+    gt_image[cube_x // 4: cube_x // 2, cube_x // 4: cube_y // 2, cube_z // 2 : (cube_z // 4)*3] = torch.tensor([1.0])
+    gt_image[cube_x // 2 : (cube_z // 4)*3, cube_y // 2 : (cube_z // 4)*3, cube_x // 4 :cube_z // 2] = torch.tensor([1.0])
         
     # normlize
     mins = [0., 0., 0.]
@@ -111,12 +111,12 @@ if __name__ == '__main__':
     grid_size = 6
     
     num_channel = 2  # 占据或者不占据
-    num_points = 200 # 高斯点
+    num_points = 1000 # 高斯点
     
     # 我这样做其实是一个生成式的3D模型，雷达是采样的点
     gaussian_model = GaussianSSC(num_points=num_points, H = cube_x, W = cube_y, L = cube_z, BLOCK_W = grid_size, BLOCK_H = grid_size, BLOCK_L = grid_size, lidar_mins=mins).cuda()
     
-    steps = 500
+    steps = 1000
 
     # loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.8, 1]).cuda())
     loss_fn = nn.BCEWithLogitsLoss(weight=torch.tensor([1.])).cuda()
@@ -173,6 +173,36 @@ if __name__ == '__main__':
 
 # visulize
 # -------------------------------------------------------------------------------------------------------
+
+def add_reference_grid(plotter, bounds=None, n_ticks=5, color="gray", opacity=0.2):
+    """添加立方体网格和坐标轴标签"""
+    if bounds is None:
+        bounds = np.array(plotter.bounds)
+    
+    # 主立方体框架
+    grid = pv.Box(bounds=bounds)
+    plotter.add_mesh(
+        grid,
+        color=color,
+        opacity=opacity,
+        style="wireframe",
+        line_width=1.5,
+        lighting=False,
+        label="Reference Grid"
+    )
+    
+    # 手动添加坐标轴标签（替代旧版add_axes_labels）
+    axis_labels = ["X", "Y", "Z"]
+    for i, label in enumerate(axis_labels):
+        plotter.add_text(
+            f"{label}",
+            position=(bounds[2*i+1] + 0.5, bounds[1] if i==0 else bounds[3] if i==1 else bounds[5]),
+            font_size=12,
+            shadow=True,
+            color="black"
+        )
+    return grid
+
 def rendering_output(out):
     mask = np.where(out > 0.5, True, False)  # out: N
     points_masked = points[mask].astype(np.float32)
@@ -189,6 +219,13 @@ def rendering_output(out):
         cmap='coolwarm', 
     )
 
+    grid_bounds = [
+        0, 100,
+        0, 100,
+        0, 100
+    ]
+    add_reference_grid(plotter, bounds=grid_bounds)
+    plotter.add_floor(color='lightgray', opacity=0.1)  
     plotter.window_size = [800, 600]
     image = plotter.screenshot(return_img=True)
     plotter.close()
@@ -208,7 +245,8 @@ def get_color(opacity):
         g = max(0, min(255, int(255 * (1 + opacity))))
         b = max(0, min(255, int(255 * (1 + opacity))))
     return (r, g, b)
-    
+
+
 def rendering_gaussian(quaternions, centers, scales, gaussian_opacity):
     num_ellipsoids = centers.shape[0]
     
@@ -250,7 +288,16 @@ def rendering_gaussian(quaternions, centers, scales, gaussian_opacity):
         line_width=0.1,         # 边缘线宽
         opacity=0.7,            # 透明度
     )
+
+    grid_bounds = [
+        0, 100,
+        0, 100,
+        0, 100
+    ]
+    add_reference_grid(plotter, bounds=grid_bounds)
+
     plotter.enable_ssao(radius=0.1) 
+    plotter.add_floor(color='lightgray', opacity=0.1) 
     plotter.window_size = [800, 600]
     image = plotter.screenshot(return_img=True)
     plotter.close()
@@ -278,8 +325,10 @@ for data in vis_data:
     data["scale"] = data["scale"] * 3
     
     data["opacity"] =  data["opacity"] / max_opacity
+
+    mask = np.where(data["opacity"] > -1e9, True, False).squeeze(1)  # out: N
     
-    frames_gaussian.append(rendering_gaussian(data["quat"], data["xyz"], data["scale"], data["opacity"]))
+    frames_gaussian.append(rendering_gaussian(data["quat"][mask], data["xyz"][mask], data["scale"][mask], data["opacity"][mask]))
     
 
 frames_out[0].save(
