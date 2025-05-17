@@ -187,8 +187,6 @@ __device__ void render_one_pixel_of_one_batch_gaussian(
 
         const float3 delta = {xyz_opac.x - point.x, xyz_opac.y - point.y, xyz_opac.z - point.z};
 
-        // printf("delta %.2f %.2f %.2f\n", delta.x, delta.y, delta.z);
-
         // calculate sigma in 3D
         const float sigma = 0.5f * (conic[0] * delta.x * delta.x +
                                      conic[3] * delta.y * delta.y +
