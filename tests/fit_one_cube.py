@@ -68,6 +68,7 @@ class GaussianSSC(nn.Module):
     def get_scaling(self):
         return torch.exp(self._scaling)
         # 返回 torch.exp(self._scaling) 的结果
+        
     @property
     def get_opacity(self):
         # return torch.exp(self._opacity) # 保证 > 0
@@ -117,7 +118,7 @@ if __name__ == '__main__':
     grid_size = 6
     
     num_channel = 2  # 占据或者不占据
-    num_points = 500 # 高斯点
+    num_points = 10000 # 高斯点  很明显这个实现不会因为点越多而 loss 越小
     
     # 我这样做其实是一个生成式的3D模型，雷达是采样的点
     gaussian_model = GaussianSSC(num_points=num_points, H = cube_x, W = cube_y, L = cube_z, BLOCK_W = grid_size, BLOCK_H = grid_size, BLOCK_L = grid_size, lidar_mins=mins).cuda()
