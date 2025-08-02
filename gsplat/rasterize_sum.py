@@ -60,8 +60,6 @@ def rasterize_gaussians_sum(
     #     # make sure colors are float [0,1]
     #     colors = colors.float() / 255
 
-    # 是不是可以这样：计算是否占据的时候，先有一个二分类，再有一个多分类
-    # Gaussian former的哪一篇， 很可能是将 opacity作为occupancy的分类了
     # -----------------------------------------------
     # semantics shape: (N, channels)
     # background shape: (N, 1)
