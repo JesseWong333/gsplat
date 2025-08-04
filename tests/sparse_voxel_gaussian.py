@@ -11,6 +11,7 @@ from gsplat.rasterize_sum import rasterize_gaussians_sum
 from tqdm import tqdm
 import math
 import open3d as o3d
+import open3d.core as o3c
 from spconv.pytorch.utils import PointToVoxel
 
 np.random.seed(1)
@@ -36,34 +37,33 @@ def random_quat_tensor(N):
 class GaussianSSC(nn.Module):
     def __init__(self, **kwargs):
         super().__init__()
-        self.init_num_points = kwargs.get("num_points", 2000)
-        self.H, self.W, self.L = kwargs["H"], kwargs["W"], kwargs["L"]  # Note, here H, W, L are the dimension of x, y, z
-        self.BLOCK_W, self.BLOCK_H, self.BLOCK_L = kwargs["BLOCK_W"], kwargs["BLOCK_H"], kwargs["BLOCK_L"]
-        self.tile_bounds = (
-            (self.W + self.BLOCK_W - 1) // self.BLOCK_W,
-            (self.H + self.BLOCK_H - 1) // self.BLOCK_H,
-            (self.L + self.BLOCK_L - 1) // self.BLOCK_L,
-        )
+        self.num_points_per_block = kwargs.get("Gaussian_points_per_block", 4)
+        self.block_coords = kwargs.get("block_coords", None)  # N, 3
+        self.num_blocks = self.block_coords.shape[0]
+        self.tile_bounds = kwargs.get("block_d", [125, 125, 125])  # [dx, dy, dz]
+        self.block_resolution = kwargs.get("block_resolution", 8)
+        self.voxel_size = kwargs.get("voxel_size", 0.001)
+        self.block_size = np.array(self.voxel_size * self.block_resolution)
         
-        self.lidar_mins = kwargs.get("lidar_mins", [-10, -10, -10])
-        
-        self._xyz = nn.Parameter(torch.atanh(2 * (torch.rand(self.init_num_points, 3) - 0.5)))  # 通过与后面的thanhh函数，得到-1到1之间的数. 做了范围限制
+        self._xyz = nn.Parameter(torch.atanh(2 * (torch.rand(self.num_blocks, self.num_points_per_block, 3) - 0.5)))  # 通过与后面的thanhh函数，得到-1到1之间的数. 做了范围限制
         # self._xyz = nn.Parameter(torch.atanh(0.95 + 0.01 * (torch.rand(self.init_num_points, 3) - 0.5))) # 不好的坐标初始化
         
-        self._scaling = nn.Parameter(torch.log(torch.rand(self.init_num_points, 3)))
+        self._scaling = nn.Parameter(torch.log(torch.rand(self.num_blocks, self.num_points_per_block, 3)))
 
-        self.register_buffer('_opacity', torch.ones((self.init_num_points, 1)))
+        self.register_buffer('_opacity', torch.ones((self.num_blocks, self.num_points_per_block, 1)))
         # self._opacity = nn.Parameter(torch.logit(0.5 * torch.ones(self.init_num_points, 1))) # 限制在0-1之间
         # self._opacity = nn.Parameter(10 * torch.rand(self.init_num_points, 1))  # 结合 exp 保证 > 0
-        self._opacity = nn.Parameter(torch.rand(self.init_num_points, 1))
-        self._rotation = nn.Parameter(random_quat_tensor(self.init_num_points))
+        # self._opacity = nn.Parameter(torch.rand(self.init_num_points, 1))
+        self._rotation = nn.Parameter(random_quat_tensor(self.num_blocks*self.num_points_per_block))
 
-        self._features_dc = nn.Parameter(torch.rand(self.init_num_points, kwargs.get("num_channel", 7)))
+        self._features_dc = nn.Parameter(torch.rand(self.num_blocks * self.num_points_per_block, kwargs.get("num_channel", 7)))
         # self.register_buffer('_features_dc', torch.ones((self.init_num_points, 1)))
 
     @property
     def get_xyz(self):
-        return torch.tanh(self._xyz) 
+        relative_xyx = 0.5 * torch.tanh(self._xyz) + 0.5  # (-1, 1)  -> (0, 1)
+        global_xyx  = 2 * (self.block_coords + relative_xyx) * self.block_size - 1  # 坐标转换到全局坐标系 (0, 1) -> (-1, 1)
+        return global_xyx
 
     @property
     def get_scaling(self):
@@ -79,10 +79,10 @@ class GaussianSSC(nn.Module):
         return torch.nn.functional.normalize(self._rotation)  # 旋转四元数模长为1
     
     def forward(self, x):
-        # rendering: x: B, N, 3 要渲染的位置
+        # rendering: x: N, 3 要渲染block
         
         xys, depths, radii, conics, num_tiles_hit = project_gaussians(self.get_xyz, self.get_scaling, 1, 
-                                                                                       self.get_rotation, self.H, self.W, self.L,
+                                                                                       self.get_rotation, 1, 1, 1,
                                                                                             self.tile_bounds)
         return rasterize_gaussians_sum(x, xys, depths, radii, conics, num_tiles_hit, 
                                         self._features_dc, 
@@ -142,70 +142,39 @@ def get_index(positive_indices, indices):
 
 if __name__ == '__main__':
     
+    bounds=[-0.5, -0.5, -0.5, 0.5, 0.5, 0.5]
+    voxel_size = 0.001
+    block_resolution = 8
     
-    # ------------------------------------------------------------------------------------------------------------------
-    # 单独的一个物体拟合实验
-    from plyfile import PlyData
-    from glob import glob
+    block_size = voxel_size * block_resolution
     
-    file_list = glob("/data/datasets/conv_occupancy_data/synthetic_room_dataset/rooms_04/00000990/points_iou/*.npz")
-
-    points_l = []
-    semantics_l = []
-    for points_path in file_list:
-        points, semantics = load_file(points_path)
-        points_l.append(points)
-        semantics_l.append(semantics)
+    block_dx = np.ceil((bounds[3] - bounds[0]) / block_size).astype(int)
+    block_dy = np.ceil((bounds[4] - bounds[1]) / block_size).astype(int)
+    block_dz = np.ceil((bounds[5] - bounds[2]) / block_size).astype(int)
     
-    points = np.concatenate(points_l, axis=0)
-    semantics = np.concatenate(semantics_l, axis=0)
-
-    # -1 wall; max_index, empty_classes  --> 0 empty_classes, 1 wall; 2 '04256520', 3 '03636649', 4 '03001627', 5 '04379243', 6 '02933112'
-    semantics += 2
-    empty_classes = semantics.max()
-    semantics = np.where(semantics == empty_classes, 0, semantics)
+    # to-do： 参数调节 1) 内部有太多的点填满了，只表面的 surface 的是不是更好  2）改为 res=16
+    sparse_file = "/data/datasets/synthetic_room_dataset_with_meshes/rooms_08/00000985_voxel_1000_res_8.npz"
     
-    semantics_f = semantics.astype(np.float32)
+    hashmap = o3c.HashMap.load(sparse_file)
     
-    sampled_points = points / (1.1 + 10e-6)  * 20 # [-10， 10]  # 实际位置
+    block_coords = hashmap.key_tensor().numpy() # N, 3 
+    block_values = hashmap.value_tensor(0).numpy() # N, 16, 16, 16
+    block_semantics = hashmap.value_tensor(1).numpy() # N, 16, 16, 16 
     
-    sampled_points = np.concatenate((sampled_points, semantics_f[:, np.newaxis]), axis=1)
-    sampled_points = torch.from_numpy(sampled_points).float().cuda()
-    positive_points = sampled_points[semantics != 0] # 只保留非空的点
-
-    lidar_mins = [-10., -10., -10.]
-    grid_size = [1, 1, 1]  # cu file config相应更改, 20 * 20 * 20
+    block_semantics += 2 
     
-    # ----------------------------------------------------------------
-    # https://github.com/traveller59/spconv/blob/v2.3.8/docs/USAGE.md 
-    # quantize
-    pointToVoxel = PointToVoxel(grid_size, [-10, -10, -10, 10, 10, 10], num_point_features=4, max_num_voxels=80000, max_num_points_per_voxel=1, device=torch.device("cuda:0"))
-    _, voxel_positive_indices, _ = pointToVoxel(positive_points)
-    
-    # 只取 positive voxel 中的点
-    pointToVoxel_sample = PointToVoxel(grid_size, [-10, -10, -10, 10, 10, 10], num_point_features=4, max_num_voxels=80000, max_num_points_per_voxel=256, device=torch.device("cuda:0"))
-    voxels, voxel_indices, num_per_voxel = pointToVoxel_sample(sampled_points)
-    
-    index = get_index(voxel_positive_indices, voxel_indices)  # 获取 positive_indices 在 indices 中的索引
-    
-    # keep the positive voxels
-    voxels = voxels[index]
-    num_per_voxel = num_per_voxel[index]
-    voxel_positive_indices = voxel_positive_indices[:, [2, 1, 0]]
-    
-    sampled_voxel_points = []
-    for i in range(voxel_positive_indices.shape[0]):
-        sampled_voxel_points.append(voxels[i, :num_per_voxel[i], :])
-    sampled_voxel_points = torch.concatenate(sampled_voxel_points, dim=0)
-    pass
-    # ----------------------------------------------------------------
-    
+    # 0 empty_classes, 1 wall; 2 '04256520', 3 '03636649', 4 '03001627', 5 '04379243', 6 '02933112'
     
     num_channel = 7  # 占据或者不占据
-    num_points = 2000 # 高斯点
+    Gaussian_points_per_block = 4 # 高斯点
     
     # 使用 sparse voxel gaussian
-    gaussian_model = GaussianSSC(num_points=num_points, H = 20, W = 20, L = 20, BLOCK_W = 1, BLOCK_H = 1, BLOCK_L = 1, lidar_mins=lidar_mins, num_channel=num_channel).cuda()
+    gaussian_model = GaussianSSC(Gaussian_points_per_block=Gaussian_points_per_block, 
+                                 block_coords=block_coords, 
+                                 block_d=[block_dx, block_dy, block_dz], 
+                                 voxel_size=voxel_size, 
+                                 block_resolution=block_resolution,
+                                 num_channel=num_channel).cuda()
     
     steps = 2000
 
