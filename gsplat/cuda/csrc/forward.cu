@@ -43,7 +43,7 @@ __global__ void project_gaussians_forward_kernel(
     scale_rot_to_cov3d(scale, glob_scale, quat, cur_cov3d);
     // printf("cur_cov3d %.4f\n", cur_cov3d[0]);
 
-    float radius = ceil(3.f * fmaxf(fmaxf(scale.x, scale.y), scale.z));
+    float radius = 3.f * fmaxf(fmaxf(scale.x, scale.y), scale.z);
     // printf("radius %d %.2f\n", idx, radius);
 
     float conic[6];
@@ -74,7 +74,7 @@ __global__ void project_gaussians_forward_kernel(
 
     num_tiles_hit[idx] = tile_area;
     depths[idx] = 0.0f;
-    radii[idx] = (int)radius;
+    radii[idx] = radius;  // (int)radius, convert to int ?
     xys[idx] = center;
 }
 
