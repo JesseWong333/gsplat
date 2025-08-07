@@ -43,7 +43,7 @@ __global__ void project_gaussians_forward_kernel(
     scale_rot_to_cov3d(scale, glob_scale, quat, cur_cov3d);
     // printf("cur_cov3d %.4f\n", cur_cov3d[0]);
 
-    float radius = 3.f * fmaxf(fmaxf(scale.x, scale.y), scale.z);
+    float radius = ceil(3.f * fmaxf(fmaxf(scale.x, scale.y), scale.z));
     // printf("radius %d %.2f\n", idx, radius);
 
     float conic[6];
@@ -74,7 +74,7 @@ __global__ void project_gaussians_forward_kernel(
 
     num_tiles_hit[idx] = tile_area;
     depths[idx] = 0.0f;
-    radii[idx] = radius;  // (int)radius, convert to int ?
+    radii[idx] = (int)radius;  // (int)radius, convert to int ?
     xys[idx] = center;
 }
 
@@ -249,6 +249,10 @@ __global__ void nd_rasterize_forward_sum(
     
     int2 range = tile_bins[tile_id];
     int2 pts_range = tile_bins_pts[tile_id];
+
+    if (range.x == range.y || pts_range.x == pts_range.y) {
+        return;
+    }
     
     int num_batches = (range.y - range.x + N_THREADS - 1) / N_THREADS;  // 当前 tile高斯点的数量 / tile线程数； 一个线程需要从全局内存中取的高斯点数
     int num_points_rendering = (pts_range.y - pts_range.x + N_THREADS - 1) / N_THREADS; // 一个线程需要渲染的点数

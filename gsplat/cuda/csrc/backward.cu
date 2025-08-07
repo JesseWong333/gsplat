@@ -184,6 +184,10 @@ __global__ void nd_rasterize_backward_sum_kernel(
         
     const int2 range = tile_bins[tile_id];
     const int2 pts_range = tile_bins_pts[tile_id];
+
+    if (range.x == range.y || pts_range.x == pts_range.y) {
+        return;
+    }
  
     const int tr = block.thread_rank();
 

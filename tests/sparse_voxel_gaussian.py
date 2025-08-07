@@ -12,7 +12,7 @@ from tqdm import tqdm
 import math
 import open3d as o3d
 import open3d.core as o3c
-from spconv.pytorch.utils import PointToVoxel
+import time
 
 np.random.seed(1)
 torch.manual_seed(1)
@@ -38,32 +38,42 @@ class GaussianSSC(nn.Module):
     def __init__(self, **kwargs):
         super().__init__()
         self.num_points_per_block = kwargs.get("Gaussian_points_per_block", 4)
-        self.block_coords = kwargs.get("block_coords", None)  # N, 3
+        self.block_coords = torch.from_numpy(kwargs.get("block_coords", None)).cuda().float() # N, 3
         self.num_blocks = self.block_coords.shape[0]
-        self.tile_bounds = kwargs.get("block_d", [125, 125, 125])  # [dx, dy, dz]
-        self.block_resolution = kwargs.get("block_resolution", 8)
-        self.voxel_size = kwargs.get("voxel_size", 0.001)
-        self.block_size = np.array(self.voxel_size * self.block_resolution)
+        
+        self.H, self.W, self.L = kwargs["H"], kwargs["W"], kwargs["L"]  # Note, here H, W, L are the dimension of x, y, z
+        self.BLOCK_W, self.BLOCK_H, self.BLOCK_L = kwargs["BLOCK_W"], kwargs["BLOCK_H"], kwargs["BLOCK_L"]
+        # todo
+        assert self.BLOCK_W == self.BLOCK_H == self.BLOCK_L, "BLOCK_W, BLOCK_H, BLOCK_L should be equal"
+        self.tile_bounds = (
+            (self.W + self.BLOCK_W - 1) // self.BLOCK_W,
+            (self.H + self.BLOCK_H - 1) // self.BLOCK_H,
+            (self.L + self.BLOCK_L - 1) // self.BLOCK_L,
+        )
+        
+        self.lidar_mins = kwargs.get("lidar_mins", [0., 0., 0.])
         
         self._xyz = nn.Parameter(torch.atanh(2 * (torch.rand(self.num_blocks, self.num_points_per_block, 3) - 0.5)))  # 通过与后面的thanhh函数，得到-1到1之间的数. 做了范围限制
         # self._xyz = nn.Parameter(torch.atanh(0.95 + 0.01 * (torch.rand(self.init_num_points, 3) - 0.5))) # 不好的坐标初始化
         
-        self._scaling = nn.Parameter(torch.log(torch.rand(self.num_blocks, self.num_points_per_block, 3)))
+        self._scaling = nn.Parameter(torch.log(self.BLOCK_W / 3 * torch.rand(self.num_blocks * self.num_points_per_block, 3)))
 
-        self.register_buffer('_opacity', torch.ones((self.num_blocks, self.num_points_per_block, 1)))
+        self.register_buffer('_opacity', torch.ones((self.num_blocks * self.num_points_per_block, 1)))
         # self._opacity = nn.Parameter(torch.logit(0.5 * torch.ones(self.init_num_points, 1))) # 限制在0-1之间
         # self._opacity = nn.Parameter(10 * torch.rand(self.init_num_points, 1))  # 结合 exp 保证 > 0
         # self._opacity = nn.Parameter(torch.rand(self.init_num_points, 1))
-        self._rotation = nn.Parameter(random_quat_tensor(self.num_blocks*self.num_points_per_block))
+        self._rotation = nn.Parameter(random_quat_tensor(self.num_blocks * self.num_points_per_block))
 
         self._features_dc = nn.Parameter(torch.rand(self.num_blocks * self.num_points_per_block, kwargs.get("num_channel", 7)))
         # self.register_buffer('_features_dc', torch.ones((self.init_num_points, 1)))
 
     @property
     def get_xyz(self):
-        relative_xyx = 0.5 * torch.tanh(self._xyz) + 0.5  # (-1, 1)  -> (0, 1)
-        global_xyx  = 2 * (self.block_coords + relative_xyx) * self.block_size - 1  # 坐标转换到全局坐标系 (0, 1) -> (-1, 1)
-        return global_xyx
+        relative_xyx = 0.5 * torch.tanh(self._xyz) + 0.5  # (-1, 1)  -> (0, 1) (num_blocks, num_points_per_block, 3)
+        global_xyx  = (self.block_coords[:, None, :] + relative_xyx) * self.BLOCK_H  # 坐标转换到全局坐标系
+        global_xyx = global_xyx / torch.tensor([self.H, self.W, self.L], device=global_xyx.device) # 归一化到 (0, 1)
+        global_xyx = 2* global_xyx - 1  # 转换到 (-1, 1)
+        return global_xyx.view(self.num_blocks * self.num_points_per_block, 3)  # (num_blocks * num_points_per_block, 3)
 
     @property
     def get_scaling(self):
@@ -82,7 +92,7 @@ class GaussianSSC(nn.Module):
         # rendering: x: N, 3 要渲染block
         
         xys, depths, radii, conics, num_tiles_hit = project_gaussians(self.get_xyz, self.get_scaling, 1, 
-                                                                                       self.get_rotation, 1, 1, 1,
+                                                                                       self.get_rotation, self.H, self.W, self.L,
                                                                                             self.tile_bounds)
         return rasterize_gaussians_sum(x, xys, depths, radii, conics, num_tiles_hit, 
                                         self._features_dc, 
@@ -98,147 +108,110 @@ def load_file(path):
     semantics = points_dict['semantics']
     return points, semantics
 
-class PointQuantizer:   
-    def __init__(self, voxel_size, ranges, num_point_features=3, max_num_voxels=8000, max_num_points_per_voxel=1, device=torch.device("cpu:0")):
-
-        self.voxel_size = voxel_size
-        self.ranges = ranges
-        self.pointToVoxel = PointToVoxel(self.voxel_size, self.ranges, num_point_features, max_num_voxels, max_num_points_per_voxel, device)
-
-    def __call__(self, points):
-        voxels, indices, num_per_voxel = self.pointToVoxel(points)
-        
-        return indices
-
-
-def get_index(positive_indices, indices):
-    """
-    获取 positive_indices 在 indices 中的索引
-    positive_indices: tensor [N, 3] 
-    indices: [M, 3]
-    """
-    positive_expanded = positive_indices.unsqueeze(1)  # [N, 1, 3]
-    indices_expanded = indices.unsqueeze(0)            # [1, M, 3]
-    
-    # Element-wise comparison
-    equal = (positive_expanded == indices_expanded)    # [N, M, 3]
-    
-    # Check if all 3 coordinates match for each pair
-    matches = equal.all(dim=2)                         # [N, M]
-    
-    # Find the index in indices for each positive_index
-    # Returns the index in indices for each positive_indices, or -1 if not found
-    index_in_indices = torch.where(matches)[1]         # Get the matching indices
-    
-    # Create result tensor with -1 as default (for non-found items)
-    result = torch.full((positive_indices.shape[0],), -1, dtype=torch.long, device=positive_indices.device)
-    
-    # Get the indices of positive_indices that have matches
-    positive_has_match = torch.where(matches)[0]
-    
-    # Assign the matching indices
-    result[positive_has_match] = index_in_indices
-    return result
 
 if __name__ == '__main__':
     
-    bounds=[-0.5, -0.5, -0.5, 0.5, 0.5, 0.5]
-    voxel_size = 0.001
-    block_resolution = 8
+    # bounds=[-0.5, -0.5, -0.5, 0.5, 0.5, 0.5]
+    bounds = [1000, 1000, 1000]
+    voxel_size = 1
+    block_resolution = 16
+    
+    mins = [0., 0., 0.]
     
     block_size = voxel_size * block_resolution
     
-    block_dx = np.ceil((bounds[3] - bounds[0]) / block_size).astype(int)
-    block_dy = np.ceil((bounds[4] - bounds[1]) / block_size).astype(int)
-    block_dz = np.ceil((bounds[5] - bounds[2]) / block_size).astype(int)
     
     # to-do： 参数调节 1) 内部有太多的点填满了，只表面的 surface 的是不是更好  2）改为 res=16
-    sparse_file = "/data/datasets/synthetic_room_dataset_with_meshes/rooms_08/00000985_voxel_1000_res_8.npz"
+    sparse_file = "/data/datasets/synthetic_room_dataset_with_meshes/rooms_08/00000335_voxel_1000_res_16.npz"
+    # sparse_file = "./samples/1a04_1000_16.npz"
     
     hashmap = o3c.HashMap.load(sparse_file)
     
     block_coords = hashmap.key_tensor().numpy() # N, 3 
     block_values = hashmap.value_tensor(0).numpy() # N, 16, 16, 16
-    block_semantics = hashmap.value_tensor(1).numpy() # N, 16, 16, 16 
+    block_semantics = hashmap.value_tensor(1).numpy() # N, 16, 16, 16
     
     block_semantics += 2 
     
     # 0 empty_classes, 1 wall; 2 '04256520', 3 '03636649', 4 '03001627', 5 '04379243', 6 '02933112'
     
     num_channel = 7  # 占据或者不占据
-    Gaussian_points_per_block = 4 # 高斯点
+    Gaussian_points_per_block = 12 # 高斯点
     
     # 使用 sparse voxel gaussian
     gaussian_model = GaussianSSC(Gaussian_points_per_block=Gaussian_points_per_block, 
-                                 block_coords=block_coords, 
-                                 block_d=[block_dx, block_dy, block_dz], 
-                                 voxel_size=voxel_size, 
-                                 block_resolution=block_resolution,
-                                 num_channel=num_channel).cuda()
+                                 block_coords = block_coords,
+                                 H = bounds[0], W = bounds[1], L = bounds[2], 
+                                 BLOCK_W = block_resolution, BLOCK_H = block_resolution, BLOCK_L = block_resolution, 
+                                 lidar_mins=mins).cuda()
     
     steps = 2000
 
-    loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.1, 1, 1, 1, 1, 1, 1])).cuda()
+    loss_fn = nn.CrossEntropyLoss().cuda()
     # loss_fn = nn.BCEWithLogitsLoss(weight=torch.tensor([1.])).cuda()
     # loss_fn = nn.BCELoss(weight=torch.tensor([1.])).cuda()
 
-    optimizer = torch.optim.Adam(gaussian_model.parameters(), lr=0.005)
+    optimizer = torch.optim.Adam(gaussian_model.parameters(), lr=0.01)
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.5)
     gaussian_model.train()
 
+    # 向量化计算所有块的最小坐标
+    block_mins = block_coords * block_size  # Shape: (B, 3)
+    
+    # 生成相对坐标（在块内的坐标）
+    coords = np.linspace(0, block_size, block_resolution, endpoint=False)
+    x_rel, y_rel, z_rel = np.meshgrid(coords, coords, coords, indexing='ij')
+    relative_points = np.stack([x_rel, y_rel, z_rel], axis=-1).reshape(-1, 3)  # (R³, 3) where R=block_resolution
+    
+    # 为每个块添加相对坐标
+    batch_sample_points = block_mins[:, np.newaxis, :] + relative_points[np.newaxis, :, :]  # (B, R³, 3)
+    batch_sample_points = torch.from_numpy(batch_sample_points.reshape(-1, 3)).cuda().float()  # (B*R³, 3)
+    targetes = torch.from_numpy(block_semantics).reshape(-1).cuda().long()  #    N, 16, 16, 16 -> N * 16 * 16 * 16
+        
     progress_bar = tqdm(range(steps), desc="Training")
     for i in progress_bar:
-    
-        sampled_points = torch.from_numpy(valid_points).cuda()
-        sampled_target = torch.from_numpy(semantics).cuda()
-
-        out = gaussian_model.forward(sampled_points)
-        # out = out.squeeze(1)
+       
+        # random sampling
+        start_time = time.time()
+        indices = torch.randint(0, batch_sample_points.shape[0], (1000000,))
+        sample_points = batch_sample_points[indices]
+        sampled_target = targetes[indices]
+        
+        sampling_time = time.time()
+        
+        out = gaussian_model.forward(sample_points)
+        
+        forward_time = time.time()
+        
         loss = loss_fn(out, sampled_target)
         # torch.nn.utils.clip_grad_norm_(gaussian_model.parameters(), max_norm=1.0)
         loss.backward()   
+        
+        backward_time = time.time()
         optimizer.step()
         optimizer.zero_grad()
         
-        progress_bar.set_description(f"Step {i}, Loss: {loss.item()}")
-
-
-    # torch.save(gaussian_model.state_dict(), "./gaussian_model.pth.tar")
-
-# 这个重建效果不好可能是因为缩放了
+        progress_bar.set_description(f"Step {i}, Loss: {loss.item():.6f}, Sampling time: {sampling_time - start_time:.6f}, Forward time: {forward_time - sampling_time:.6f}, Backward time: {backward_time - forward_time:.6f}")
 
 # samping and save
-start = -10
-end = 10
-step = 0.2
-x = np.arange(start, end, step)
-y = np.arange(start, end, step)
-z = np.arange(start, end, step)
 
-# Generate all combinations of coordinates
-X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-points = np.stack((X, Y, Z), axis=-1).reshape(-1, 3)
+start_time = time.time()
+outputs = gaussian_model.forward(batch_sample_points)# N * 16 * 16 * 16, num_classes
 
-outputs = gaussian_model.forward(torch.from_numpy(points).cuda().float()) # N * num_classes
+rendering_result = outputs.argmax(dim=-1)
 
-# -------------------------------------------------------------
-save_points = np.concatenate((points, outputs.cpu().detach().numpy()), axis=-1)
-np.save("./samples/points_for_march_cubes_color", save_points) 
+print("Forward time:", time.time() - start_time)
 
-pass
+rendering_result = rendering_result.reshape(-1, block_resolution, block_resolution, block_resolution).cpu().numpy()  # N, 16, 16, 16
 
-# -------------------------------------------------------------
-# rendering_result = outputs.argmax(dim=-1)
+rendering_result = rendering_result.astype(np.int8)  # 转换为 int8 类型
 
-# mask = rendering_result != 0  # 只保留非空的点
-# rendering_result = rendering_result[mask]
-# points = points[mask.cpu().detach().numpy()]
-
-# save_points = np.concatenate((points, rendering_result.unsqueeze(-1).cpu().detach().numpy()), axis=-1)
-
-# print(save_points.shape)
-
-# np.save("./samples/points_500_color", save_points) 
-
-
-
+hashmap = o3c.HashMap(50000,
+                    key_dtype=o3c.int64,
+                    key_element_shape=(3),
+                    value_dtype=(o3c.int8),  # 多个元素加s 
+                    value_element_shape=(block_resolution, block_resolution, block_resolution),  # 每个格子4096， 对应cuda线程256*16
+                    device=o3c.Device("cpu:0"))
+    
+hashmap.insert(block_coords, rendering_result)  # 插入数据
+hashmap.save("./samples/sparse_voxel_gaussian_rendering.npz")  # 保存到文件
