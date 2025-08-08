@@ -94,7 +94,7 @@ class GaussianSSC(nn.Module):
         xys, depths, radii, conics, num_tiles_hit = project_gaussians(self.get_xyz, self.get_scaling, 1, 
                                                                                        self.get_rotation, self.H, self.W, self.L,
                                                                                             self.tile_bounds)
-        print("num_tiles_hit_ave: {}".format(num_tiles_hit.float().mean().item()))
+        # print("num_tiles_hit_ave: {}".format(num_tiles_hit.float().mean().item()))
         print("num_tiles_hit_max: {}".format(num_tiles_hit.float().max().item()))
         print("radii_min: {}".format(radii.float().min().item()))
         print("radii_ave: {}".format(radii.float().mean().item()))
