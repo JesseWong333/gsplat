@@ -9,7 +9,7 @@ bounds=[0, 0, 0, 1000, 1000, 1000]
 voxel_size = 1
 block_resolution = 16
 
-hashmap = o3c.HashMap.load("./samples/sparse_voxel_gaussian_rendering.npz")
+hashmap = o3c.HashMap.load("./samples/GOAT_1000_16.npz")
 
 cube = np.zeros((1000, 1000, 1000))
 
