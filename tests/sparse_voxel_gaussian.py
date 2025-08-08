@@ -94,6 +94,11 @@ class GaussianSSC(nn.Module):
         xys, depths, radii, conics, num_tiles_hit = project_gaussians(self.get_xyz, self.get_scaling, 1, 
                                                                                        self.get_rotation, self.H, self.W, self.L,
                                                                                             self.tile_bounds)
+        print("num_tiles_hit_ave: {}".format(num_tiles_hit.float().mean().item()))
+        print("num_tiles_hit_max: {}".format(num_tiles_hit.float().max().item()))
+        print("radii_min: {}".format(radii.float().min().item()))
+        print("radii_ave: {}".format(radii.float().mean().item()))
+        print("radii_max: {}".format(radii.float().max().item()))
         return rasterize_gaussians_sum(x, xys, depths, radii, conics, num_tiles_hit, 
                                         self._features_dc, 
                                        self.get_opacity, 
@@ -136,7 +141,7 @@ if __name__ == '__main__':
     # 0 empty_classes, 1 wall; 2 '04256520', 3 '03636649', 4 '03001627', 5 '04379243', 6 '02933112'
     
     num_channel = 7  # 占据或者不占据
-    Gaussian_points_per_block = 12 # 高斯点
+    Gaussian_points_per_block = 8 # 高斯点
     
     # 使用 sparse voxel gaussian
     gaussian_model = GaussianSSC(Gaussian_points_per_block=Gaussian_points_per_block, 
