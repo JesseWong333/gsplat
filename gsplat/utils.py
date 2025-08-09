@@ -199,3 +199,24 @@ def bin_pts(
     
     tile_bin = _C.get_tile_bin_edges_pts(tile_bounds[0] * tile_bounds[1] * tile_bounds[2], pts.shape[0], tile_ids_sorted.contiguous()) # tile_bounds[0] * tile_bounds[1] * tile_bounds[2], 2
     return pts_sorted, sorted_indices, inv_sorted_indices, tile_bin
+
+def bin_gaussian_pts(     
+                xys,
+                tile_bounds,
+                block
+            ):
+    """
+    # return: gaussian_ids_sorted, tile_bins
+    """
+    x = xys[:, 0] // block[0]  # N 
+    y = xys[:, 1] // block[1]
+    z = xys[:, 2] // block[2]
+    tile_ids = tile_bounds[0] *tile_bounds[1] * z + tile_bounds[0] * y + x # N, 每个高斯点的tile_id
+    tile_ids = tile_ids.int()
+    tile_ids_sorted, sorted_indices = torch.sort(tile_ids)
+    
+    gaussian_ids = torch.arange(xys.shape[0]).to(xys.device)
+    gaussian_ids_sorted = gaussian_ids[sorted_indices].int()
+    
+    tile_bin = _C.get_tile_bin_edges_pts(tile_bounds[0] * tile_bounds[1] * tile_bounds[2], xys.shape[0], tile_ids_sorted.contiguous()) 
+    return gaussian_ids_sorted, tile_bin

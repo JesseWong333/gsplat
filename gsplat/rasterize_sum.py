@@ -8,7 +8,7 @@ from torch import Tensor
 from torch.autograd import Function
 
 import gsplat.cuda as _C
-from .utils import bin_and_sort_gaussians, compute_cumulative_intersects, bin_pts
+from .utils import bin_and_sort_gaussians, compute_cumulative_intersects, bin_pts, bin_gaussian_pts
 
 
 def rasterize_gaussians_sum(
@@ -144,21 +144,28 @@ class _RasterizeGaussiansSum(Function):
             final_Ts = torch.zeros(cube_x, cube_y, cube_z, device=xys.device)
             final_idx = torch.zeros(cube_x, cube_y, cube_z, device=xys.device)
         else:
-            (
-                isect_ids_unsorted,
-                gaussian_ids_unsorted,
-                isect_ids_sorted,
-                gaussian_ids_sorted,
-                tile_bins,
-            ) = bin_and_sort_gaussians(
-                num_points,
-                num_intersects,
-                xys,
-                depths,
-                radii,
-                cum_tiles_hit,
-                tile_bounds,
-            )
+            # 当半径过大，一个高斯点 touch过多时，这里的 bin_and_sort_gaussians占据显存会越来越高
+            # (
+            #     isect_ids_unsorted,
+            #     gaussian_ids_unsorted,
+            #     isect_ids_sorted,
+            #     gaussian_ids_sorted,
+            #     tile_bins,
+            # ) = bin_and_sort_gaussians(
+            #     num_points,
+            #     num_intersects,
+            #     xys,
+            #     depths,
+            #     radii,
+            #     cum_tiles_hit,
+            #     tile_bounds,
+            # )
+            # 让每个高斯点只 touch 当前的 tile, xys中心所在的位置就是其
+            
+            # gaussian_ids_sorted
+            # tile_bins
+            
+            gaussian_ids_sorted, tile_bins = bin_gaussian_pts(xys, tile_bounds, block)
             
             pts = pts - torch.tensor(lidar_mins).to(pts.device)
             pts_sorted, sorted_indices, inv_sorted_indices, tile_bins_pts = bin_pts(pts, tile_bounds, block)

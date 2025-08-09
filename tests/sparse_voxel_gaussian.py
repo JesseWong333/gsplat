@@ -94,11 +94,11 @@ class GaussianSSC(nn.Module):
         xys, depths, radii, conics, num_tiles_hit = project_gaussians(self.get_xyz, self.get_scaling, 1, 
                                                                                        self.get_rotation, self.H, self.W, self.L,
                                                                                             self.tile_bounds)
-        # print("num_tiles_hit_ave: {}".format(num_tiles_hit.float().mean().item()))
-        print("num_tiles_hit_max: {}".format(num_tiles_hit.float().max().item()))
-        print("radii_min: {}".format(radii.float().min().item()))
-        print("radii_ave: {}".format(radii.float().mean().item()))
-        print("radii_max: {}".format(radii.float().max().item()))
+        #print("num_tiles_hit_ave: {}".format(num_tiles_hit.float().mean().item()))
+        # print("num_tiles_hit_max: {}".format(num_tiles_hit.float().max().item()))
+        # print("radii_min: {}".format(radii.float().min().item()))
+        # print("radii_ave: {}".format(radii.float().mean().item()))
+        # print("radii_max: {}".format(radii.float().max().item()))
         return rasterize_gaussians_sum(x, xys, depths, radii, conics, num_tiles_hit, 
                                         self._features_dc, 
                                        self.get_opacity, 
@@ -127,8 +127,8 @@ if __name__ == '__main__':
     
     
     # to-do： 参数调节 1) 内部有太多的点填满了，只表面的 surface 的是不是更好  2）改为 res=16
-    sparse_file = "/data/datasets/synthetic_room_dataset_with_meshes/rooms_08/00000335_voxel_1000_res_16.npz"
-    # sparse_file = "./samples/1a04_1000_16.npz"
+    # sparse_file = "/data/datasets/synthetic_room_dataset_with_meshes/rooms_08/00000335_voxel_1000_res_16.npz"
+    sparse_file = "./samples/GOAT_1000_16.npz"
     
     hashmap = o3c.HashMap.load(sparse_file)
     
@@ -141,7 +141,7 @@ if __name__ == '__main__':
     # 0 empty_classes, 1 wall; 2 '04256520', 3 '03636649', 4 '03001627', 5 '04379243', 6 '02933112'
     
     num_channel = 7  # 占据或者不占据
-    Gaussian_points_per_block = 8 # 高斯点
+    Gaussian_points_per_block = 24 # 高斯点
     
     # 使用 sparse voxel gaussian
     gaussian_model = GaussianSSC(Gaussian_points_per_block=Gaussian_points_per_block, 
@@ -203,18 +203,20 @@ if __name__ == '__main__':
 start_time = time.time()
 outputs = gaussian_model.forward(batch_sample_points)# N * 16 * 16 * 16, num_classes
 
-rendering_result = outputs.argmax(dim=-1)
+# rendering_result = outputs.argmax(dim=-1)
+rendering_result = 1. - outputs.softmax(dim=-1)[:, 0] # 
 
 print("Forward time:", time.time() - start_time)
 
-rendering_result = rendering_result.reshape(-1, block_resolution, block_resolution, block_resolution).cpu().numpy()  # N, 16, 16, 16
+rendering_result = rendering_result.reshape(-1, block_resolution, block_resolution, block_resolution).detach().cpu().numpy()  # N, 16, 16, 16
 
-rendering_result = rendering_result.astype(np.int8)  # 转换为 int8 类型
+# rendering_result = rendering_result.astype(np.int8)  # 转换为 int8 类型
+rendering_result = rendering_result.astype(np.float32)  # 转换为 int8 类型
 
 hashmap = o3c.HashMap(50000,
                     key_dtype=o3c.int64,
                     key_element_shape=(3),
-                    value_dtype=(o3c.int8),  # 多个元素加s 
+                    value_dtype=(o3c.float32),  # 多个元素加s 
                     value_element_shape=(block_resolution, block_resolution, block_resolution),  # 每个格子4096， 对应cuda线程256*16
                     device=o3c.Device("cpu:0"))
     

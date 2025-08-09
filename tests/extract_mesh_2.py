@@ -5,6 +5,7 @@ import open3d.core as o3c
 import trimesh
 import time
 
+# 避免 marching cube锯齿状的做法，是不是应该用logistic值？还是不够光滑， label smothing也没用
 bounds=[0, 0, 0, 1000, 1000, 1000]
 voxel_size = 1
 block_resolution = 16
@@ -15,7 +16,7 @@ cube = np.zeros((1000, 1000, 1000))
 
 block_coords = hashmap.key_tensor().numpy() # N, 3
 block_semantics = hashmap.value_tensor().numpy() # N, 16, 16, 16
-block_semantics[block_semantics > 0] = 1
+# block_semantics[block_semantics > 0] = 1
 
 block_size = voxel_size * block_resolution
 block_mins = block_coords * block_size + np.array([bounds[0], bounds[1], bounds[2]]) # N, 3
