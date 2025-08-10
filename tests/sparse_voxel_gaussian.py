@@ -203,20 +203,21 @@ if __name__ == '__main__':
 start_time = time.time()
 outputs = gaussian_model.forward(batch_sample_points)# N * 16 * 16 * 16, num_classes
 
-# rendering_result = outputs.argmax(dim=-1)
-rendering_result = 1. - outputs.softmax(dim=-1)[:, 0] # 
+rendering_result = outputs.argmax(dim=-1)
+# rendering_result = 1. - outputs.softmax(dim=-1)[:, 0] # 
 
 print("Forward time:", time.time() - start_time)
 
 rendering_result = rendering_result.reshape(-1, block_resolution, block_resolution, block_resolution).detach().cpu().numpy()  # N, 16, 16, 16
 
-# rendering_result = rendering_result.astype(np.int8)  # 转换为 int8 类型
-rendering_result = rendering_result.astype(np.float32)  # 转换为 int8 类型
+rendering_result = rendering_result.astype(np.int8)  # 转换为 int8 类型
+# rendering_result = rendering_result.astype(np.float32)  # 转换为 int8 类型
 
 hashmap = o3c.HashMap(50000,
                     key_dtype=o3c.int64,
                     key_element_shape=(3),
-                    value_dtype=(o3c.float32),  # 多个元素加s 
+                    # value_dtype=(o3c.float32),  # 多个元素加s 
+                    value_dtype=(o3c.int8),
                     value_element_shape=(block_resolution, block_resolution, block_resolution),  # 每个格子4096， 对应cuda线程256*16
                     device=o3c.Device("cpu:0"))
     
