@@ -1,4 +1,4 @@
-# 训练的时候使用稀疏的 voxel 采样
+# 验证线性层预测高斯
 
 # semantic 版本测试
 
@@ -16,6 +16,18 @@ import time
 
 np.random.seed(1)
 torch.manual_seed(1)
+
+def find_row_intersection(arr1, arr2):
+    # 转换为结构化数组以便使用 intersect1d
+    dtype = np.dtype([('x', arr1.dtype), ('y', arr1.dtype), ('z', arr1.dtype)])
+    arr1_view = np.array([tuple(row) for row in arr1], dtype=dtype)
+    arr2_view = np.array([tuple(row) for row in arr2], dtype=dtype)
+    
+    # 求交集
+    intersected = np.intersect1d(arr1_view, arr2_view)
+    
+    # 转回普通数组
+    return np.array([[item['x'], item['y'], item['z']] for item in intersected])
 
 def random_quat_tensor(N):
     """
@@ -37,9 +49,8 @@ def random_quat_tensor(N):
 class GaussianSSC(nn.Module):
     def __init__(self, **kwargs):
         super().__init__()
-        self.num_points_per_block = kwargs.get("Gaussian_points_per_block", 4)
-        self.block_coords = torch.from_numpy(kwargs.get("block_coords", None)).cuda().float() # N, 3
-        self.num_blocks = self.block_coords.shape[0]
+        self.Num_points_per_block = kwargs.get("Gaussian_points_per_block", 4)
+        self.N_classes = kwargs.get("N_classes")
         
         self.H, self.W, self.L = kwargs["H"], kwargs["W"], kwargs["L"]  # Note, here H, W, L are the dimension of x, y, z
         self.BLOCK_W, self.BLOCK_H, self.BLOCK_L = kwargs["BLOCK_W"], kwargs["BLOCK_H"], kwargs["BLOCK_L"]
@@ -53,55 +64,45 @@ class GaussianSSC(nn.Module):
         
         self.lidar_mins = kwargs.get("lidar_mins", [0., 0., 0.])
         
-        self._xyz = nn.Parameter(torch.atanh(2 * (torch.rand(self.num_blocks, self.num_points_per_block, 3) - 0.5)))  # 通过与后面的thanhh函数，得到-1到1之间的数. 做了范围限制
-        # self._xyz = nn.Parameter(torch.atanh(0.95 + 0.01 * (torch.rand(self.init_num_points, 3) - 0.5))) # 不好的坐标初始化
-        
-        # self._scaling = nn.Parameter(torch.log(self.BLOCK_W / 3 * torch.rand(self.num_blocks * self.num_points_per_block, 3)))
-        self._scaling = nn.Parameter(torch.rand(self.num_blocks * self.num_points_per_block, 3))
-
-        self.register_buffer('_opacity', torch.ones((self.num_blocks * self.num_points_per_block, 1)))
-      
-        self._rotation = nn.Parameter(random_quat_tensor(self.num_blocks * self.num_points_per_block))
-
-        self._features_dc = nn.Parameter(torch.rand(self.num_blocks * self.num_points_per_block, kwargs.get("num_channel", 7)))
-        # self.register_buffer('_features_dc', torch.ones((self.init_num_points, 1)))
-
-    @property
-    def get_xyz(self):
-        relative_xyx = 0.5 * torch.tanh(self._xyz) + 0.5  # (-1, 1)  -> (0, 1) (num_blocks, num_points_per_block, 3)
-        global_xyx  = (self.block_coords[:, None, :] + relative_xyx) * self.BLOCK_H  # 坐标转换到全局坐标系
+        self.gaussian_pred = nn.Linear(768, (3 + 7 + self.N_classes) * self.Num_points_per_block )
+    
+    def get_global_xyz(self, xyz, block_coords):
+        num_blocks = block_coords.shape[0]
+        relative_xyx = 0.5 * torch.tanh(xyz) + 0.5  # (-1, 1)  -> (0, 1) (num_blocks, num_points_per_block, 3)
+        global_xyx  = (block_coords[:, None, :] + relative_xyx) * self.BLOCK_H  # 坐标转换到全局坐标系
         global_xyx = global_xyx / torch.tensor([self.H, self.W, self.L], device=global_xyx.device) # 归一化到 (0, 1)
         global_xyx = 2* global_xyx - 1  # 转换到 (-1, 1)
-        return global_xyx.view(self.num_blocks * self.num_points_per_block, 3)  # (num_blocks * num_points_per_block, 3)
-
-    @property
-    def get_scaling(self):
-        # return torch.exp(self._scaling)
-        return torch.sigmoid(self._scaling) * self.BLOCK_W # 保证 > 0, 最小0.01, 最大 BLOCK_W / 2.5 + 0.01
+        return global_xyx.view(num_blocks * self.Num_points_per_block, 3) 
     
-    @property
-    def get_opacity(self):
-        # return torch.exp(self._opacity) # 保证 > 0
-        return self._opacity
-    
-    @property
-    def get_rotation(self):
-        return torch.nn.functional.normalize(self._rotation)  # 旋转四元数模长为1
-    
-    def forward(self, x):
+    def forward(self, x, sparse_features, block_coords):
         # rendering: x: N, 3 要渲染block
+        num_blocks = block_coords.shape[0]
+        gaussian_params =  self.gaussian_pred(sparse_features) # N, (3 + 7 + N_classes) * Gaussian_points_per_block
+        gaussian_params = gaussian_params.view(num_blocks, self.Num_points_per_block, -1)
+        xyz = gaussian_params[..., 0:3] # (num_blocks, num_points_per_block, 3)
         
-        xys, depths, radii, conics, num_tiles_hit = project_gaussians(self.get_xyz, self.get_scaling, 1, 
-                                                                                       self.get_rotation, self.H, self.W, self.L,
+        gaussian_params = gaussian_params[..., 3:].view(num_blocks*self.Num_points_per_block, 7 + self.N_classes)  # (num_blocks*num_points_per_block, 7 + N_classes)
+        scaling = gaussian_params[..., 0:3]  # Scaling factors
+        rotation = gaussian_params[..., 3:7]  # Assuming quaternion representation
+        opacity = torch.ones((num_blocks * self.Num_points_per_block, 1)).to(xyz.device)
+        features_dc = gaussian_params[..., 7:]  # Class probabilities or labels
+        xyz = self.get_global_xyz(xyz, block_coords)
+        scaling = torch.sigmoid(scaling) * self.BLOCK_H
+        rotation = torch.nn.functional.normalize(rotation, dim=-1) 
+        
+        xys, depths, radii, conics, num_tiles_hit = project_gaussians(xyz, scaling, 1, 
+                                                                                       rotation, self.H, self.W, self.L,
                                                                                             self.tile_bounds)
+        
         # print("num_tiles_hit_ave: {}".format(num_tiles_hit.float().mean().item()))
         # print("num_tiles_hit_max: {}".format(num_tiles_hit.float().max().item()))
         # print("radii_min: {}".format(radii.float().min().item()))
         # print("radii_ave: {}".format(radii.float().mean().item()))
         # print("radii_max: {}".format(radii.float().max().item()))
+        
         return rasterize_gaussians_sum(x, xys, depths, radii, conics, num_tiles_hit, 
-                                        self._features_dc, 
-                                       self.get_opacity, 
+                                       features_dc, 
+                                       opacity, 
                                        self.H, self.W, self.L,
                                        self.BLOCK_W, self.BLOCK_H, self.BLOCK_L,
                                        self.lidar_mins 
@@ -130,8 +131,8 @@ if __name__ == '__main__':
     block_size = voxel_size * block_resolution
     
     
-    sparse_file = "/data/datasets/synthetic_room_dataset_with_meshes/rooms_08/00000003_voxel_512_res_16.npz"
-    # sparse_file = "./samples/00000189_voxel_512_res_16.npz"
+    # sparse_file = "/data/datasets/synthetic_room_dataset_with_meshes/rooms_08/00000335_voxel_512_res_16.npz"
+    sparse_file = "./samples/00000003_voxel_512_res_16.npz"
     # sparse_file = "./samples/003916_2048_16.npz"
     # sparse_file = "/hd_cache/users/junjie/projects/convolutional_occupancy_networks/samples/003916_4096_16.npz"
     
@@ -141,21 +142,32 @@ if __name__ == '__main__':
     block_values = hashmap.value_tensor(0).numpy() # N, 16, 16, 16
     block_semantics = hashmap.value_tensor(1).numpy() # N, 16, 16, 16
     
-    # block_semantics[block_semantics > -2] = 1  # 只保留占据的部分
-    # block_semantics[block_semantics <= -2] = 0  # 只
-    block_semantics += 2 
+    block_semantics[block_semantics > -2] = 1  # 只保留占据的部分
+    block_semantics[block_semantics <= -2] = 0  # 只
+    # block_semantics += 2 
     
     # 0 empty_classes, 1 wall; 2 '04256520', 3 '03636649', 4 '03001627', 5 '04379243', 6 '02933112'
     
     num_channel = 7  # 占据或者不占据
     Gaussian_points_per_block = 24 # 高斯点
     
+    # load features
+    sparse_feature = np.load("./samples/features.npy") # troisf这个采样扩充了
+    sparse_indices = np.load("./samples/indices.npy")[:, 1:]
+    
+    # block_coords和sparse_indices两个完全不一致？
+    xxx = find_row_intersection(block_coords, sparse_indices)
+    
+    
+    sparse_feature = torch.from_numpy(sparse_feature).cuda()
+    sparse_indices = torch.from_numpy(sparse_indices).cuda()
+    
     # 使用 sparse voxel gaussian
     gaussian_model = GaussianSSC(Gaussian_points_per_block=Gaussian_points_per_block, 
-                                 block_coords = block_coords,
+                                 N_classes=2,
                                  H = bounds[0], W = bounds[1], L = bounds[2], 
                                  BLOCK_W = block_resolution, BLOCK_H = block_resolution, BLOCK_L = block_resolution, 
-                                 lidar_mins=mins).cuda()
+                                 lidar_mins=mins, num_channel=num_channel).cuda()
     
     steps = 5000
 
@@ -191,7 +203,7 @@ if __name__ == '__main__':
         
         sampling_time = time.time()
         
-        out = gaussian_model.forward(sample_points)
+        out = gaussian_model.forward(sample_points, sparse_feature, sparse_indices)
         
         forward_time = time.time()
         
